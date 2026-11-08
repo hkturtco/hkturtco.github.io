@@ -1785,9 +1785,10 @@
      chapter start, so a swipe feels identical each time (native smooth scroll
      varies its duration with distance and can be interrupted by momentum) */
   var GLIDE_MS = 520;
-  var glideId = 0, glideRaf = 0, glideBehaviorSaved = null;
+  var glideId = 0, glideRaf = 0, glideTimer = 0, glideBehaviorSaved = null;
   function endGlide() {
     if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = 0; }
+    if (glideTimer) { clearTimeout(glideTimer); glideTimer = 0; }
     if (glideBehaviorSaved !== null) {
       document.documentElement.style.scrollBehavior = glideBehaviorSaved;
       glideBehaviorSaved = null;
@@ -1810,18 +1811,22 @@
     if (glideBehaviorSaved === null) glideBehaviorSaved = document.documentElement.style.scrollBehavior || '';
     /* drive the glide ourselves — CSS smooth scrolling would fight the frames */
     document.documentElement.style.scrollBehavior = 'auto';
+    function finish() {
+      if (id !== glideId) return;
+      window.scrollTo(0, target);
+      endGlide();
+    }
     var frame = function (ts) {
       if (id !== glideId) return;
       var u = clamp((ts - t0) / GLIDE_MS, 0, 1);
       var e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
       window.scrollTo(0, from + dist * e);
-      if (u < 1) {
-        glideRaf = requestAnimationFrame(frame);
-      } else {
-        glideRaf = 0;
-        endGlide();
-      }
+      if (u < 1) glideRaf = requestAnimationFrame(frame);
+      else finish();
     };
+    /* if frames stall (tab hidden, renderer suspended) the swipe must still
+       land on the chapter instead of leaving the page stuck between two */
+    glideTimer = setTimeout(finish, GLIDE_MS + 180);
     glideRaf = requestAnimationFrame(frame);
   }
   /* move exactly one chapter from wherever the film is (or is heading) */
