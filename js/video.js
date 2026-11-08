@@ -30,18 +30,6 @@
     rail: document.getElementById('rail'),
     hint: document.getElementById('scrollHint'),
     subtitle: document.getElementById('subtitle'),
-    bubble1: document.getElementById('bubble1'),
-    bubble1Text: document.getElementById('bubble1Text'),
-    bubble2: document.getElementById('bubble2'),
-    bubble2Text: document.getElementById('bubble2Text'),
-    bubble3: document.getElementById('bubble3'),
-    bubble3Text: document.getElementById('bubble3Text'),
-    bubble4: document.getElementById('bubble4'),
-    bubble4Text: document.getElementById('bubble4Text'),
-    bubble5: document.getElementById('bubble5'),
-    bubble5Text: document.getElementById('bubble5Text'),
-    bubble6: document.getElementById('bubble6'),
-    bubble6Text: document.getElementById('bubble6Text'),
     spotApk: document.getElementById('spotApk'),
     spotPip: document.getElementById('spotPip'),
     flash: document.getElementById('scannerFlash')
@@ -60,6 +48,9 @@
      out at real time instead of being scrubbed by the scroll position */
   var playbackChapter = null;
   var playbackT = 0;
+  var replayRequestSeq = 0;   /* bumped once per scroll burst that stays in one chapter */
+  var lastReplaySeq = 0;      /* last replay request already consumed by tick */
+  var entryMeter = 0;         /* counts tick-side chapter entries — bursts that caused one may not replay */
 
   var FX = { gridPulse: 0, qrPop: 0, flash: 0 };
   var REDUCED = false;
@@ -492,13 +483,17 @@
      as the chat UI it actually is. shown from ch4 on under the site.
      ============================================================ */
   var CHAT = [
+    { t: 33.9, me: false, text: 'paired ✓ inbox live — sending…' },
     { t: 36.5, me: true,  text: 'move report.pdf to my phone' },
     { t: 39.3, me: false, text: 'got it! opening a private lane…' },
-    { t: 26.1, me: false, text: 'lane open — your private lane is ready' },
-    { t: 33.9, me: false, text: 'paired ✓ inbox live — sending…' },
-    { t: 41.3, me: false, text: 'delivered ✓ LAN only, no cloud' },
-    { t: 44.2, me: true,  text: 'so nothing leaves the room?' },
-    { t: 46.5, me: false, text: 'never. LAN only — nothing leaves the room.' }
+    { t: 40.7, me: false, text: '✓ report.pdf is in your inbox' },
+    { t: 42.2, me: true,  text: 'send notes-dev.pdf too' },
+    { t: 43.6, me: false, text: '✓ notes-dev.pdf is in your inbox' },
+    { t: 44.9, me: true,  text: 'now mix-tracks.zip + telemetry.json' },
+    { t: 46.2, me: false, text: '✓ mix-tracks.zip delivered' },
+    { t: 47.0, me: false, text: '✓ telemetry.json delivered' },
+    { t: 49.3, me: true,  text: 'so nothing leaves the room?' },
+    { t: 50.7, me: false, text: 'never. LAN only — nothing leaves the room.' }
   ];
 
   function chatLayout(now) {
@@ -507,7 +502,39 @@
       if (now >= CHAT[i].t) rows.push(i);
       else if (now >= CHAT[i].t - 1.0) { typing = i; break; }
     }
-    return { rows: rows, typing: typing };
+    /* the pairing QR rides the message flow as qrbot's attachment */
+    var card = now >= T_QR_ON && now < T_QR_END - 0.12;
+    return { rows: rows, typing: typing, card: card };
+  }
+
+  /* the QR as a chat attachment — painted straight into the chat canvas
+     (same matrix the old floating popup used) */
+  function drawQrBlock(x, left, top, size, dim) {
+    var N = 25, q = size * 0.09, i, j, on;
+    var cell = (size - 2 * q) / N;
+    x.fillStyle = dim ? '#dfe7f3' : '#f2f6ff';
+    x.fillRect(left, top, size, size);
+    x.fillStyle = dim ? '#33415c' : '#101a2c';
+    var rnd = lcg(20260101);
+    for (i = 0; i < N; i++) {
+      for (j = 0; j < N; j++) {
+        var fName = (i < 8 && j < 8) || (i < 8 && j >= N - 8) || (i >= N - 8 && j < 8);
+        if (fName) continue;
+        if (i === 6 || j === 6) { on = (i + j) % 2 === 0; }
+        else { on = rnd() > 0.44; }
+        if (on) x.fillRect(left + q + i * cell, top + q + j * cell, cell * 0.92, cell * 0.92);
+      }
+    }
+    var finder = function (fi, fj) {
+      for (var a = 0; a < 7; a++) {
+        for (var b = 0; b < 7; b++) {
+          var fres = a === 0 || a === 6 || b === 0 || b === 6;
+          var core = a >= 2 && a <= 4 && b >= 2 && b <= 4;
+          if (fres || core) x.fillRect(left + q + (fi + a) * cell, top + q + (fj + b) * cell, cell * 0.95, cell * 0.95);
+        }
+      }
+    };
+    finder(0, 0); finder(N - 7, 0); finder(0, N - 7);
   }
 
   function drawBotAvatar(x, cx, cy, r) {
@@ -534,86 +561,214 @@
     x.textAlign = 'left';
   }
 
+  /* capsule bubble w/ gradient fill, edge and a soft colored glow */
+  function chatBubble(x, X, Y, w, h, fillA, fillB, edge, glow) {
+    x.save();
+    x.shadowColor = glow; x.shadowBlur = 12; x.shadowOffsetY = 3;
+    var g = x.createLinearGradient(0, Y, 0, Y + h);
+    g.addColorStop(0, fillA); g.addColorStop(1, fillB);
+    x.fillStyle = g;
+    rr(x, X, Y, w, h, 12); x.fill();
+    x.restore();
+    if (edge) {
+      x.strokeStyle = edge; x.lineWidth = 1;
+      rr(x, X, Y, w, h, 12); x.stroke();
+    }
+  }
+
   function drawChat(now, lay, blink) {
     var x = chatScr.canvas.getContext('2d');
     x.setTransform(3, 0, 0, 3, 0, 0);
-    var W = 512, H = 300, i, m, k, shown, text, tw, bw, bx, by;
-    x.fillStyle = '#04070d';
-    x.fillRect(0, 0, W, H);
+    var W = 512, H = 300, i, m, k, text, tw, bw, pop;
+    var bg = x.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#050a13'); bg.addColorStop(1, '#070d1a');
+    x.fillStyle = bg; x.fillRect(0, 0, W, H);
     /* header */
     x.fillStyle = '#0b1220';
-    x.fillRect(0, 0, W, 34);
-    drawBotAvatar(x, 22, 17, 10);
-    x.fillStyle = '#e9eef9';
+    x.fillRect(0, 0, W, 36);
+    x.fillStyle = 'rgba(148,178,255,0.07)';
+    x.fillRect(0, 35.5, W, 0.5);
+    drawBotAvatar(x, 22, 18, 10);
+    x.strokeStyle = 'rgba(34,211,238,0.45)'; x.lineWidth = 1;
+    x.beginPath(); x.arc(22, 18, 11.5, 0, 6.29); x.stroke();
+    x.fillStyle = '#eef3fd';
     x.font = '700 13px Inter, system-ui, sans-serif';
-    x.fillText('qrbot', 38, 15);
+    x.fillText('qrbot', 40, 16);
     x.fillStyle = '#5d6b85';
     x.font = '500 10px "JetBrains Mono", monospace';
-    x.fillText('your private file lane', 38, 28);
+    x.fillText('your private file lane', 40, 29);
+    x.fillStyle = 'rgba(52,211,153,0.12)';
+    rr(x, 440, 9, 62, 18, 9); x.fill();
+    x.strokeStyle = 'rgba(52,211,153,0.35)';
+    rr(x, 440, 9, 62, 18, 9); x.stroke();
     x.fillStyle = blink ? '#34d399' : '#1f8a5b';
-    x.beginPath(); x.arc(452, 12, 3, 0, 6.29); x.fill();
-    x.fillStyle = '#34d399';
-    x.font = '600 10px Inter, system-ui, sans-serif';
-    x.fillText('LAN only', 460, 15);
-    /* rows */
-    x.font = '600 14.5px Inter, system-ui, sans-serif';
-    var y = 50, RH = 28, by;
-    /* keep the chat to the last few rows so old QR mentions scroll out */
-    var visibleRows = lay.rows.length > 4 ? lay.rows.slice(lay.rows.length - 4) : lay.rows.slice();
+    x.beginPath(); x.arc(450, 18, 2.8, 0, 6.29); x.fill();
+    x.fillStyle = '#4ade9b';
+    x.font = '600 9px Inter, system-ui, sans-serif';
+    x.fillText('LAN only', 456, 21);
+
+    /* ---- message rows: centered column, bot left / you right ---- */
+    x.font = '600 13.5px Inter, system-ui, sans-serif';
+    var y = lay.card ? 208 : 66, RH = 30, by;
+    var capRow = lay.card ? 2 : 4;
+    var visibleRows = lay.rows.length > capRow ? lay.rows.slice(lay.rows.length - capRow) : lay.rows.slice();
+    if (visibleRows.length && !lay.card) {
+      /* day divider */
+      x.strokeStyle = 'rgba(148,178,255,0.10)'; x.lineWidth = 1;
+      x.beginPath(); x.moveTo(40, 47.5); x.lineTo(118, 47.5); x.moveTo(394, 47.5); x.lineTo(472, 47.5); x.stroke();
+      x.fillStyle = '#43536f';
+      x.font = '600 8px "JetBrains Mono", monospace';
+      var dv = 'today 21:42 · private lane · your LAN';
+      x.fillText(dv, (W - x.measureText(dv).width) / 2, 50.5);
+      x.font = '600 13.5px Inter, system-ui, sans-serif';
+    }
     for (i = 0; i < visibleRows.length; i++) {
       m = CHAT[visibleRows[i]];
-      text = m.text;
-      shown = clamp(Math.floor((now - m.t) * 22), 0, text.length);
-      text = text.slice(0, shown);
+      /* rows pop in whole when they arrive (typing-dots handle the in-between
+         feel) — char-by-char at 5× playback would be unreadable */
+      text = now >= m.t ? m.text : '';
+      pop = clamp((now - m.t) / 0.5, 0, 1);
+      by = y + (1 - pop) * 7;
       tw = x.measureText(text).width;
-      bw = tw + 26;
+      x.save();
+      x.globalAlpha = Math.min(1, pop * 2.4);
       if (m.me) {
-        by = y;
-        x.fillStyle = 'rgba(244,114,182,0.14)';
-        rr(x, 486 - bw, by, bw, 22, 10); x.fill();
-        x.fillStyle = '#f9c7e0';
-        x.textAlign = 'right';
-        x.fillText(text, 473, by + 15);
-        x.textAlign = 'left';
-        drawYouAvatar(x, 503, by + 11, 8.5);
+        bw = tw + 36;
+        chatBubble(x, 442 - bw, by, bw, 24, 'rgba(244,114,182,0.20)', 'rgba(236,72,153,0.07)', 'rgba(244,114,182,0.45)', 'rgba(244,114,182,0.28)');
+        x.fillStyle = '#ffd9ee';
+        x.fillText(text, 442 - bw + 8, by + 16.5);
+        x.fillStyle = 'rgba(255,183,223,0.85)';
+        x.font = '700 9px Inter, system-ui, sans-serif';
+        x.fillText('✓✓', 442 - bw + 12 + tw + 4, by + 16);
+        x.font = '600 13.5px Inter, system-ui, sans-serif';
+        drawYouAvatar(x, 462, by + 12, 8.5);
       } else {
-        drawBotAvatar(x, 176, by = y + 11, 8.5);
-        x.fillStyle = 'rgba(34,211,238,0.10)';
-        rr(x, 204, y, bw, 22, 10); x.fill();
-        x.strokeStyle = 'rgba(103,232,249,0.5)';
-        x.lineWidth = 1;
-        rr(x, 204, y, bw, 22, 10); x.stroke();
-        x.fillStyle = '#c8f6ff';
-        x.fillText(text, 217, y + 15);
+        bw = tw + 26;
+        chatBubble(x, 72, by, bw, 24, 'rgba(34,211,238,0.16)', 'rgba(56,189,248,0.05)', 'rgba(103,232,249,0.40)', 'rgba(34,211,238,0.22)');
+        x.fillStyle = '#d9f9ff';
+        x.fillText(text, 80, by + 16.5);
+        drawBotAvatar(x, 54, by + 12, 8.5);
       }
+      x.restore();
       y += RH;
     }
     /* typing dots for the message being prepared */
-    if (lay.typing >= 0) {
-      drawBotAvatar(x, 176, y + 11, 8.5);
-      x.fillStyle = 'rgba(34,211,238,0.08)';
-      rr(x, 204, y + 1, 44, 22, 10); x.fill();
+    if (lay.typing >= 0 && (!lay.card || lay.rows.length < 2)) {
+      drawBotAvatar(x, 54, y + 12, 8.5);
+      chatBubble(x, 72, y + 1, 52, 22, 'rgba(34,211,238,0.10)', 'rgba(56,189,248,0.04)', 'rgba(103,232,249,0.22)', 'rgba(34,211,238,0.10)');
       var ti = Math.floor(now * 3) % 3;
       for (k = 0; k < 3; k++) {
-        x.fillStyle = k === ti ? '#67e8f9' : 'rgba(103,232,249,0.28)';
-        x.beginPath(); x.arc(218 + k * 12, y + 12, 3, 0, 6.29); x.fill();
+        x.fillStyle = k === ti ? '#7deeff' : 'rgba(103,232,249,0.30)';
+        x.beginPath(); x.arc(88 + k * 12, y + 12, 3.2, 0, 6.29); x.fill();
       }
     }
+
+    /* ---- qrbot's pairing attachment: the QR lives in the conversation ---- */
+    if (lay.card) {
+      var cp = clamp((now - T_QR_ON) / 0.5, 0, 1);
+      var cs = Math.max(0.001, easeOutBack(cp));
+      var cal = Math.min(1, ramp(now, T_QR_ON, T_QR_ON + 0.18)) * (1 - ramp(now, T_QR_END - 0.55, T_QR_END - 0.12));
+      var ok = now >= T_FLASH - 0.05;
+      var qX = 210, qY = 82, qS = 92;
+      x.save();
+      x.globalAlpha = cal;
+      x.translate(256, 127); x.scale(cs, cs); x.translate(-256, -127);
+      /* card shell */
+      x.save();
+      x.shadowColor = 'rgba(103,232,249,0.30)'; x.shadowBlur = 26; x.shadowOffsetY = 6;
+      var cg = x.createLinearGradient(0, 52, 0, 202);
+      cg.addColorStop(0, 'rgba(14,21,38,0.96)'); cg.addColorStop(1, 'rgba(8,13,25,0.96)');
+      x.fillStyle = cg;
+      rr(x, 157, 52, 198, 150, 14); x.fill();
+      x.restore();
+      x.strokeStyle = ok ? 'rgba(52,211,153,0.55)' : 'rgba(148,178,255,0.20)';
+      x.lineWidth = 1;
+      rr(x, 157, 52, 198, 150, 14); x.stroke();
+      /* card header */
+      drawBotAvatar(x, 172, 66, 7);
+      x.fillStyle = '#e9eef9'; x.font = '700 10px Inter, system-ui, sans-serif';
+      x.fillText('qrfile · pairing', 183, 69.5);
+      x.fillStyle = ok ? 'rgba(52,211,153,0.15)' : 'rgba(34,211,238,0.12)';
+      rr(x, 276, 58, 71, 17, 8.5); x.fill();
+      x.strokeStyle = ok ? 'rgba(52,211,153,0.50)' : 'rgba(34,211,238,0.35)';
+      rr(x, 276, 58, 71, 17, 8.5); x.stroke();
+      x.fillStyle = ok ? '#4ade9b' : '#7deeff';
+      x.font = '700 9px "JetBrains Mono", monospace';
+      x.textAlign = 'center';
+      if (ok) {
+        x.fillText('✓ verified', 311.5, 70);
+      } else {
+        var secs = Math.max(61, 300 - Math.floor((now - T_QR_ON) * 9));
+        x.fillText(Math.floor(secs / 60) + ':' + ('0' + (secs % 60)).slice(-2), 311.5, 70);
+      }
+      x.textAlign = 'left';
+      /* QR + viewfinder brackets */
+      drawQrBlock(x, qX, qY, qS, ok);
+      x.strokeStyle = ok ? 'rgba(52,211,153,0.35)' : 'rgba(103,232,249,0.55)';
+      x.lineWidth = 1.5;
+      x.beginPath();
+      x.moveTo(qX - 4 + 9, qY - 4); x.lineTo(qX - 4, qY - 4); x.lineTo(qX - 4, qY - 4 + 9);
+      x.moveTo(qX + qS + 4 - 9, qY - 4); x.lineTo(qX + qS + 4, qY - 4); x.lineTo(qX + qS + 4, qY - 4 + 9);
+      x.moveTo(qX + qS + 4 - 9, qY + qS + 4); x.lineTo(qX + qS + 4, qY + qS + 4); x.lineTo(qX + qS + 4, qY + qS + 4 - 9);
+      x.moveTo(qX - 4 + 9, qY + qS + 4); x.lineTo(qX - 4, qY + qS + 4); x.lineTo(qX - 4, qY + qS + 4 - 9);
+      x.stroke();
+      /* scan sweep inside the QR */
+      if (!ok) {
+        var swin = ramp(now, S3 + 6.5, S3 + 6.9) * (1 - ramp(now, S3 + 9.85, S3 + 10.15));
+        if (swin > 0.01) {
+          var sy = qY + sweepVal(now) * qS;
+          x.save();
+          x.beginPath(); x.rect(qX, qY, qS, qS); x.clip();
+          x.shadowColor = 'rgba(103,232,249,0.8)'; x.shadowBlur = 8;
+          x.fillStyle = 'rgba(125,238,255,' + (0.5 * swin).toFixed(3) + ')';
+          x.fillRect(qX, sy - 3, qS, 5);
+          x.restore();
+        }
+      }
+      /* paired badge */
+      if (ok) {
+        x.save();
+        x.shadowColor = 'rgba(52,211,153,0.8)'; x.shadowBlur = 10;
+        x.fillStyle = '#0f8f63';
+        x.beginPath(); x.arc(qX + qS - 2, qY + qS - 2, 10, 0, 6.29); x.fill();
+        x.restore();
+        x.fillStyle = '#eafff5';
+        x.font = '700 11px Inter, system-ui, sans-serif';
+        x.textAlign = 'center';
+        x.fillText('✓', qX + qS - 2, qY + qS + 2);
+        x.textAlign = 'left';
+      }
+      /* caption */
+      x.fillStyle = '#64789a';
+      x.font = '500 9px "JetBrains Mono", monospace';
+      x.textAlign = 'center';
+      x.fillText(!ok ? 'scan with qrfile on your phone —' : 'lane open — files now move', 256, 186);
+      x.fillText(!ok ? 'confirm the 4 digits to talk' : 'device to device over your LAN', 256, 197);
+      x.textAlign = 'left';
+      x.restore();
+    }
+
     /* input bar */
-    x.fillStyle = '#0b1220';
+    x.fillStyle = '#0a101c';
     x.fillRect(0, H - 26, W, 26);
-    x.fillStyle = 'rgba(148,178,255,0.10)';
-    rr(x, 16, H - 21, 384, 16, 8); x.fill();
+    x.fillStyle = 'rgba(148,178,255,0.06)';
+    x.fillRect(0, H - 26.5, W, 0.5);
+    x.fillStyle = 'rgba(148,178,255,0.09)';
+    rr(x, 16, H - 21, 392, 16, 8); x.fill();
+    x.strokeStyle = 'rgba(148,178,255,0.14)'; x.lineWidth = 1;
+    rr(x, 16, H - 21, 392, 16, 8); x.stroke();
+    x.fillStyle = '#41527a'; x.font = '700 10px Inter, system-ui, sans-serif';
+    x.fillText('＋', 24, H - 9);
     x.fillStyle = '#3a4760';
-    x.font = '600 11px Inter, system-ui, sans-serif';
-    x.fillText('say it in plain words — qrbot does the rest', 28, H - 9);
+    x.font = '600 10.5px Inter, system-ui, sans-serif';
+    x.fillText('say it in plain words — qrbot does the rest', 40, H - 9);
     if (blink && lay.rows.length < CHAT.length) {
       x.fillStyle = '#22d3ee';
-      x.fillRect(406, H - 20, 4, 14);
+      x.fillRect(398, H - 19, 3.5, 12);
     } else {
-      x.fillStyle = 'rgba(148,178,255,0.35)';
-      x.font = '700 11px "JetBrains Mono", monospace';
-      x.fillText('⏎', 406, H - 10);
+      x.fillStyle = 'rgba(148,178,255,0.40)';
+      x.font = '700 10px "JetBrains Mono", monospace';
+      x.fillText('⏎', 398, H - 9.5);
     }
     chatScr.texture.needsUpdate = true;
   }
@@ -625,14 +780,19 @@
     drawIfChanged: function (time) {
       var now = state.t;
       var lay = chatLayout(now);
-      var shownKey = '';
-      var c, i;
-      for (i = 0; i < lay.rows.length; i++) {
-        c = CHAT[lay.rows[i]];
-        shownKey += Math.floor((now - c.t) * 22) + ',';
+      /* newest row pops over ~0.5 film-s: quantize its entry for redraws */
+      var lastT = lay.rows.length ? CHAT[lay.rows[lay.rows.length - 1]].t : 0;
+      var pop = lay.rows.length && now < lastT + 0.5 ? Math.floor(Math.min(8, (now - lastT) * 16)) : 9;
+      var cardK = '_';
+      if (lay.card) {
+        if (now >= T_FLASH - 0.05) cardK = 'ok';
+        else {
+          var pk = clamp((now - T_QR_ON) / 0.5, 0, 1);
+          cardK = pk < 1 ? 'p' + Math.round(pk * 12) : 's' + Math.floor(sweepVal(now) * 22);
+        }
       }
       var bl = Math.floor(time * 2.6) % 2;
-      var k = lay.rows.length + '|' + lay.typing + '|' + shownKey + '|' + bl + '|' + Math.floor(now * 3) % 3;
+      var k = lay.rows.length + '|' + lay.typing + '|' + cardK + '|' + pop + '|' + bl + '|' + Math.floor(now * 3) % 3;
       if (k !== this.lastKey) { this.lastKey = k; drawChat(now, lay, bl === 1); }
     }
   };
@@ -642,39 +802,6 @@
   /* ============================================================
      static textures
      ============================================================ */
-  function makeQrTexture() {
-    var c = cnv(1024, 1024), x = c.getContext('2d');
-    x.setTransform(2, 0, 0, 2, 0, 0);
-    var N = 25, q = 30;
-    x.fillStyle = '#f2f6ff'; x.fillRect(0, 0, 512, 512);
-    var cell = (512 - 2 * q) / N;
-    var rnd = lcg(20260101);
-    x.fillStyle = '#101a2c';
-    for (var i = 0; i < N; i++) {
-      for (var j = 0; j < N; j++) {
-        var fName = (i < 8 && j < 8) || (i < 8 && j >= N - 8) || (i >= N - 8 && j < 8);
-        if (fName) continue;
-        var on;
-        if (i === 6 || j === 6) { on = (i + j) % 2 === 0; }
-        else { on = rnd() > 0.44; }
-        if (on) x.fillRect(q + i * cell, q + j * cell, cell * 0.92, cell * 0.92);
-      }
-    }
-    var finder = function (fi, fj) {
-      for (var a = 0; a < 7; a++) {
-        for (var b = 0; b < 7; b++) {
-          var ring = a === 0 || a === 6 || b === 0 || b === 6;
-          var core = a >= 2 && a <= 4 && b >= 2 && b <= 4;
-          if (ring || core) x.fillRect(q + (fi + a) * cell, q + (fj + b) * cell, cell * 0.95, cell * 0.95);
-        }
-      }
-    };
-    finder(0, 0); finder(N - 7, 0); finder(0, N - 7);
-    var t = new THREE.CanvasTexture(c);
-    t.anisotropy = 4;
-    return t;
-  }
-
   function makeSoftTex(inner, outer) {
     var c = cnv(128, 128), x = c.getContext('2d');
     var g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
@@ -1068,38 +1195,33 @@
     put(mon, new THREE.BoxGeometry(0.5, 0.04, 0.34), monoMat, 0, 0.82, 0);
     put(mon, new THREE.BoxGeometry(0.1, 0.42, 0.06), monoMat, 0, 1.02, -0.02);
     put(mon, new THREE.BoxGeometry(2.1, 1.22, 0.06), bezelMat, 0, 1.74, 0.05);
-    var screenMesh = put(mon, new THREE.PlaneGeometry(1.86, 1.02), new THREE.MeshBasicMaterial({ map: term.texture }), -0.16, 1.74, 0.099);
+    var screenMesh = put(mon, new THREE.PlaneGeometry(1.86, 1.02), new THREE.MeshBasicMaterial({ map: term.texture }), 0, 1.74, 0.099);
     put(mon, new THREE.PlaneGeometry(2.06, 0.02), new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0.6 }), 0, 2.33, 0.098);
     put(mon, new THREE.CircleGeometry(0.015, 12), new THREE.MeshBasicMaterial({ color: 0x1a1a1a }), 0, 2.3, 0.098);
     /* last chapter: the site fades IN over the terminal — the download page lives inside the film */
     var siteMesh = put(mon, new THREE.PlaneGeometry(1.86, 1.02),
       new THREE.MeshBasicMaterial({ map: siteScr.texture, transparent: true, opacity: 0 }),
-      -0.16, 1.74, 0.104);
+      0, 1.74, 0.104);
     /* ch4+: the qrbot chat fades in over the terminal too — the conversation
        lives on the screen, not in a console (under the site layer) */
     var chatMesh = put(mon, new THREE.PlaneGeometry(1.86, 1.02),
       new THREE.MeshBasicMaterial({ map: chatScr.texture, transparent: true, opacity: 0 }),
-      -0.16, 1.74, 0.101);
+      0, 1.74, 0.101);
     /* desk group position */
     desk.position.set(-2.2, 0, 0); scene.add(desk);
     mon.position.set(-2.2, 0, 0); scene.add(mon);
 
     /* --- qr popup on screen --- */
+    /* --- pairing fx only: the QR itself now lives INSIDE the chat message
+       (attachment card in drawChat), so nothing floats over the conversation.
+       This group just carries the confirm ring that pops when pairing lands,
+       anchored to the on-screen position of the in-chat QR. --- */
     var qrGroup = new THREE.Group();
-    put(qrGroup, new THREE.PlaneGeometry(0.68, 0.68), new THREE.MeshBasicMaterial({ color: 0xf2f6ff }), 0, 0, 0);
-    put(qrGroup, new THREE.PlaneGeometry(0.6, 0.6), new THREE.MeshBasicMaterial({ map: makeQrTexture() }), 0, 0, 0.004);
-    var qrBloom = makeHalo('rgba(103,232,249,0.32)', 1.55);
-    qrBloom.material.opacity = 0;
-    qrBloom.position.set(0, 0, -0.02);
-    qrGroup.add(qrBloom);
-    qrGroup.position.set(-1.66, 1.78, 0.2);
-    qrGroup.rotation.y = 0.05;
-    qrGroup.scale.set(0.001, 0.001, 0.001);
+    var confirmRing = put(qrGroup, new THREE.RingGeometry(0.2, 0.26, 40), new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }), 0, 0, 0.05);
+    qrGroup.position.set(-2.2, 1.842, 0.16);
     qrGroup.visible = false;
     scene.add(qrGroup);
-    var confirmRing = put(qrGroup, new THREE.RingGeometry(0.44, 0.5, 40), new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false }), 0, 0, 0.05);
-    var scanline = put(qrGroup, new THREE.PlaneGeometry(0.52, 0.03), new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }), 0, 0, 0.03);
-    var QR_ANCHOR = V3(-1.66, 1.78, 0.26);
+    var QR_ANCHOR = V3(-2.2, 1.842, 0.16);
 
     /* --- qrbot: the assistant's little avatar, standing on the desk
        beside the monitor. appears when the MCP attaches (ch3 on). --- */
@@ -1331,7 +1453,7 @@
       ground: ground, grid: grid, gridCalm: gridCalm, gridHot: gridHot, gridMat: grid.material,
       dustGeo: dustGeo, dustPts: dustPts, DUST: DUST, dustRnd: rndD,
       desk: desk, mon: mon, screenMesh: screenMesh, chatMesh: chatMesh, siteMesh: siteMesh, mug: mug,
-      qrGroup: qrGroup, confirmRing: confirmRing, scanline: scanline, qrBloom: qrBloom,
+      qrGroup: qrGroup, confirmRing: confirmRing,
       bot: bot, BOT_BASE_Y: BOT_BASE_Y, BOT_BASE_RY: BOT_BASE_RY, botHead: botHead, botHalo: botHalo,
       phone: phone, phoneAnchor: phoneAnchor,
       oldway: oldway, cable: cable,
@@ -1415,7 +1537,7 @@
   var T_QR_HOLD = S5;
   var T_QR_END = S5 + 0.7;
 
-  var qrS = 0, beamB = 0, coneO = 0;
+  var beamB = 0, coneO = 0;
   var tmpV = null;
   var SV_A = new THREE.Vector3(), SV_B = new THREE.Vector3();
   var nowTZ = 0;
@@ -1587,7 +1709,7 @@
       p: 'Everything above is the product. The page inside the film is the real install — the two cards on the screen are live. Pick one.' }
   ];
 
-  var CH = { copies: [] };
+  var CH = { copies: [], ops: [] };
   function buildChapters() {
     var i, c;
     for (i = 0; i < CAPS.length; i++) {
@@ -1602,29 +1724,27 @@
       var pp = document.createElement('p');
       pp.innerHTML = c.p;
       d.appendChild(kk); d.appendChild(hh); d.appendChild(pp);
+      d.style.opacity = '0';
+      d.style.visibility = 'hidden';
       el.layer.appendChild(d);
       CH.copies.push(d);
     }
   }
 
-  /* opacity + upward drift, both pure functions of film time */
-  function syncChapters(now) {
-    var i, c, s, e2, head, tail, op, local;
+  /* chapter copy is state-driven, not film-time-driven: it fades in at real
+     speed as a part starts and STAYS readable while the part plays and holds */
+  function syncChapters(dtx) {
+    var i, d, target, cur;
     for (i = 0; i < CAPS.length; i++) {
-      c = CAPS[i];
-      s = SCENE_STARTS[i];
-      e2 = i < CAPS.length - 1 ? SCENE_STARTS[i + 1] : TOTAL;
-      head = i === 0 ? 1 : ease3(ramp(now, s, s + 0.9));
-      /* last chapter: the copy clears the screen while you dolly into the page */
-      tail = i === CAPS.length - 1
-        ? 1 - ease3(ramp(now, S8 + 2.1, S8 + 3.4))
-        : 1 - ease3(ramp(now, e2 - 1.0, e2 - 0.05));
-      op = Math.min(head, tail);
-      local = clamp((now - s) / Math.max(0.01, e2 - s), 0, 1);
-      var d = CH.copies[i];
-      d.style.opacity = op.toFixed(3);
-      d.style.transform = 'translateY(' + ((0.5 - local) * 90).toFixed(1) + 'px)';
-      d.style.visibility = op > 0.005 ? 'visible' : 'hidden';
+      d = CH.copies[i];
+      target = i === playbackChapter ? 1 : 0;
+      cur = CH.ops[i] || 0;
+      cur += (target - cur) * Math.min(1, dtx * 5.5);
+      if (Math.abs(target - cur) < 0.008) cur = target;
+      CH.ops[i] = cur;
+      d.style.opacity = cur.toFixed(3);
+      d.style.transform = 'translateY(' + ((1 - cur) * 34).toFixed(1) + 'px)';
+      d.style.visibility = cur > 0.005 ? 'visible' : 'hidden';
     }
   }
 
@@ -1655,8 +1775,23 @@
     return top + (clamp(t, 0, TOTAL) / TOTAL) * span;
   }
   function scrollToChapter(i) {
+    railPending = i;
     var t = SCENE_STARTS[i] + (i > 0 ? 0.06 : 0);
     window.scrollTo({ top: chapterTopFromTime(t), behavior: REDUCED ? 'auto' : 'smooth' });
+  }
+  /* chapter the smooth glide is heading toward, if any */
+  var railPending = null;
+  /* film-time position implied by the current scroll offset (0…TOTAL) */
+  function filmPos() {
+    var r = el.track.getBoundingClientRect();
+    var vh = window.innerHeight || 1;
+    return clamp(-r.top / Math.max(1, r.height - vh), 0, 1) * TOTAL;
+  }
+  /* true while the film is covering the middle of the viewport */
+  function filmCovers() {
+    var r = el.track.getBoundingClientRect();
+    var vh = window.innerHeight || 1;
+    return r.top <= vh * 0.5 && r.bottom >= vh * 0.5;
   }
   function syncRail() {
     var idx = sceneIndex(state.t);
@@ -1664,48 +1799,9 @@
   }
 
   /* ============================================================
-     chat bubbles — projected from 3D anchors, typed by film time
+     chat bubbles — the conversation lives INSIDE the chat screen on
+     the monitor (chatScr above); no floating DOM bubbles anymore
      ============================================================ */
-  var BUB = [
-    /* ch4 — you ask, plainly (the QR isn't up yet, your phone isn't up) */
-    { el: el.bubble1, textEl: el.bubble1Text, full: 'move report.pdf to my phone', t0: 36.5, t1: 38.0, me: true },
-    /* qrbot replies, one beat later */
-    { el: el.bubble2, textEl: el.bubble2Text, full: 'got it! opening a private lane…', t0: 39.3, t1: 40.9 },
-    { el: el.bubble3, textEl: el.bubble3Text, full: 'scan this — and confirm the 4 digits.', t0: 25.2, t1: 32.9 },
-    { el: el.bubble4, textEl: el.bubble4Text, full: 'paired ✓ your inbox is live — sending!', t0: 33.6, t1: 36.3 },
-    /* ch6 — a short follow-up after the packets */
-    { el: el.bubble5, textEl: el.bubble5Text, full: '…and no cloud at all?', t0: 49.2, t1: 51.3, me: true },
-    { el: el.bubble6, textEl: el.bubble6Text, full: 'never — LAN only. nothing leaves the room.', t0: 51.5, t1: 53.6 }
-  ];
-  function syncBubbles(now) {
-    var i, B, act, n, txt, liftNow, anchor;
-    liftNow = phoneLift(now);
-    world.camera.updateMatrix();
-    world.camera.updateMatrixWorld();
-    world.camera.matrixWorldInverse.getInverse(world.camera.matrixWorld);
-    for (i = 0; i < BUB.length; i++) {
-      B = BUB[i];
-      act = now >= B.t0 && now < B.t1;
-      if (!act) {
-        if (B.el.hidden === false) B.el.hidden = true;
-        continue;
-      }
-      B.el.hidden = false;
-      n = clamp(Math.floor((now - B.t0) * 15), 0, B.full.length);
-      txt = B.full.slice(0, n);
-      if (B.textEl.textContent !== txt) B.textEl.textContent = txt;
-      B.el.classList.toggle('typed', n >= B.full.length);
-      /* your lines drift up from the phone once you're holding it;
-         qrbot's lines ride on the robot */
-      anchor = B.me && liftNow > 0.5 ? world.phoneAnchor : (B.me ? world.anchors.you : world.anchors.bot);
-      if (tmpV) {
-        anchor.getWorldPosition(tmpV);
-        tmpV.project(world.camera);
-        B.el.style.left = clamp((tmpV.x * 0.5 + 0.5) * 100, 3, 70).toFixed(2) + '%';
-        B.el.style.top = clamp((-tmpV.y * 0.5 + 0.5) * 100, 6, 88).toFixed(2) + '%';
-      }
-    }
-  }
 
   /* subtitle pill — bottom caption strip */
   var lastSub = '';
@@ -1826,19 +1922,8 @@
     world.chatMesh.material.opacity = chatIn;
     world.chatMesh.visible = chatIn > 0.01;
 
-    /* ---- QR card (pops when asked, holds, fades on the last lap) ---- */
-    qrS = easeOutBack(ramp(now, T_QR_ON, T_QR_ON + 0.9)) * (1 - ramp(now, T_QR_HOLD, T_QR_END));
-    world.qrGroup.visible = qrS > 0.02;
-    var qs = Math.max(0.001, qrS);
-    world.qrGroup.scale.set(qs, qs, qs);
-    /* screen bloom + a natural, very slight wobble of the card on the panel */
-    world.qrBloom.material.opacity = 0.5 * qs;
-    world.qrGroup.rotation.y = 0.05 + 0.025 * Math.sin(now * 0.9);
-
-    /* ---- scanline sweeping the QR ---- */
-    var sl = ramp(now, S3 + 6.5, S3 + 6.9) * (1 - ramp(now, S3 + 9.85, S3 + 10.15));
-    world.scanline.material.opacity = 0.8 * sl;
-    world.scanline.position.y = -0.24 + sweepVal(now) * 0.46;
+    /* ---- pairing scan sweep + confirm ring now render inside the chat
+       card (canvas); the 3D group only carries the ring below ---- */
 
     /* ---- scan cone (built lazily from the raised-phone anchor) ---- */
     var coneOn = now > S3 + 5.45 && now < S3 + 10.3;
@@ -1936,29 +2021,8 @@
     }
   }
 
-  /* request/response pairs for the 4 documents, one by one */
-  var REQ_PAIRS = [
-    { req: 'send report.pdf to my phone',      bot: 'sending report.pdf…',      tReq: 38.2, tBot: 38.6, tEnd: 40.4 },
-    { req: 'send notes-dev.pdf to my phone',   bot: 'sending notes-dev.pdf…',   tReq: 41.2, tBot: 41.6, tEnd: 43.4 },
-    { req: 'send mix-tracks.zip to my phone',  bot: 'sending mix-tracks.zip…',  tReq: 43.7, tBot: 44.1, tEnd: 45.9 },
-    { req: 'send telemetry.json to my phone',   bot: 'sending telemetry.json…', tReq: 46.2, tBot: 46.6, tEnd: 48.0 }
-  ];
-
-  function makeReqBubble(full, t0, t1, me) {
-    var div = document.createElement('div');
-    div.className = 'bubble ' + (me ? 'bubble-you' : 'bubble-bot');
-    var tag = document.createElement('span');
-    tag.className = 'bubble-tag';
-    tag.textContent = me ? 'you' : 'qrbot';
-    var txt = document.createElement('span');
-    txt.className = 'bubble-text';
-    txt.id = 'rb_' + Math.random().toString(36).slice(2);
-    div.appendChild(tag);
-    div.appendChild(txt);
-    div.hidden = true;
-    el.player.appendChild(div);
-    return { el: div, textEl: txt, full: full, t0: t0, t1: t1, me: me };
-  }
+  /* the 4 documents' send/ack exchange also lives in the chat screen rows
+     (see CHAT) — nothing floats in the air anymore */
 
   var clock = new THREE.Clock();
 
@@ -1975,15 +2039,20 @@
     var span = Math.max(1, r.height - vh);
     var p = clamp(-r.top / span, 0, 1);
     var targetChapter = sceneIndex(p * TOTAL);
-    if (playbackChapter === null) {
+    var chapterEntered = (playbackChapter === null || targetChapter !== playbackChapter);
+    var replayAsked = (replayRequestSeq > lastReplaySeq);
+    if (chapterEntered) {
+      /* crossing into a chapter plays it from its start — pending replays are void */
+      entryMeter++;
       playbackChapter = targetChapter;
-      playbackT = SCENE_STARTS[targetChapter];
-    } else if (targetChapter !== playbackChapter) {
-      playbackChapter = targetChapter;
-      playbackT = SCENE_STARTS[targetChapter];
+      lastReplaySeq = replayRequestSeq;
+    } else if (replayAsked) {
+      /* a scroll burst that stayed inside this chapter replays it once */
+      lastReplaySeq = replayRequestSeq;
     }
+    if (chapterEntered || replayAsked) playbackT = SCENE_STARTS[playbackChapter];
     var chapterEnd = (playbackChapter < DURS.length - 1) ? SCENE_STARTS[playbackChapter + 1] : TOTAL;
-    playbackT = Math.min(chapterEnd, playbackT + dt * (REDUCED ? 2 : 1));
+    playbackT = Math.min(chapterEnd, playbackT + dt * (REDUCED ? 3 : 5));
     state.t = playbackT;
     state.mx += (state.tmx - state.mx) * Math.min(1, dt * 3);
     state.my += (state.tmy - state.my) * Math.min(1, dt * 3);
@@ -2056,8 +2125,7 @@
     world.renderer.render(world.scene, world.camera);
 
     /* DOM syncs */
-    syncBubbles(now);
-    syncChapters(now);
+    syncChapters(dt);
     syncRail();
     syncHotspots(now);
     el.hint.style.opacity = (p > 0.03) ? '0' : '1';
@@ -2074,15 +2142,68 @@
      ============================================================ */
   function wireEvents() {
     window.addEventListener('resize', resize);
+    /* one replay per scroll burst: a burst that ends in the chapter it
+       started in replays that chapter once; a burst that crosses into a
+       new chapter is handled by the chapter-change reset instead */
+    var scrollTimer = null;
+    var burstChapter = null;
+    var burstEntryIdSafe = 0;
+    window.addEventListener('scroll', function () {
+      if (scrollTimer === null) {
+        burstChapter = sceneIndex(filmPos());
+        burstEntryIdSafe = entryMeter;
+      }
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function () {
+        scrollTimer = null;
+        railPending = null;
+        var f = sceneIndex(filmPos());
+        /* replay only if the burst never caused a chapter entry (those already
+           play via entry) AND it ended in the chapter it started in */
+        var mayReplay = (burstChapter !== null && f === burstChapter && entryMeter === burstEntryIdSafe);
+        /* at most one pending replay: a splattered gesture can't stack restarts */
+        if (mayReplay && replayRequestSeq === lastReplaySeq) replayRequestSeq++;
+        burstChapter = null;
+      }, 250);
+    }, { passive: true });
+    /* one wheel gesture = step one chapter forward/back while the film fills
+       the screen; momentum tails are swallowed, and at either end of the film
+       the wheel falls through to native scrolling so the page can move on */
+    var wheelLastAt = 0, wheelAccum = 0, gestureStepped = false, wheelLockUntil = 0;
+    window.addEventListener('wheel', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!filmCovers()) return;
+      var t = performance.now();
+      if (t < wheelLockUntil) { e.preventDefault(); return; }  /* rest of this gesture's momentum */
+      var unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? window.innerHeight || 550 : 1;
+      var dy = e.deltaY * unit, dx = e.deltaX * unit;
+      if (!dx && !dy) return;
+      if (Math.abs(dx) > Math.abs(dy) + 1) return;  /* horizontal pan */
+      if (t - wheelLastAt > 160) { wheelAccum = 0; gestureStepped = false; }
+      wheelLastAt = t;
+      if (gestureStepped) { e.preventDefault(); return; }
+      wheelAccum += dy;
+      if (Math.abs(wheelAccum) < 50) { e.preventDefault(); return; }
+      var dir = wheelAccum > 0 ? 1 : -1;
+      var from = (railPending !== null) ? railPending : sceneIndex(filmPos());
+      var to = clamp(from + dir, 0, TITLES.length - 1);
+      if (to !== from) {
+        gestureStepped = true;
+        wheelLockUntil = t + 350;
+        e.preventDefault();
+        scrollToChapter(to);
+      }
+      /* else: at an end of the story — let native scrolling move the page */
+    }, { passive: false });
     document.addEventListener('keydown', function (e) {
       var tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'r' && e.key !== 'R') return;
       /* arrows only hijack keys while the story is filling the screen */
-      var r = el.track.getBoundingClientRect();
-      var vh = window.innerHeight || 1;
-      if (!(r.top <= vh * 0.5 && r.bottom >= vh * 0.5)) return;
-      var idx = sceneIndex(state.t);
+      if (!filmCovers()) return;
+      /* base on the scroll position's chapter, not the playback clock (which
+         sits at the NEXT chapter's start while a part is holding) */
+      var idx = sceneIndex(filmPos());
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         scrollToChapter(Math.min(idx + 1, TITLES.length - 1));
@@ -2126,12 +2247,6 @@
     buildPools();
     buildChapters();
     buildRail();
-    /* request/response bubbles for the 4 documents, one by one */
-    for (var _ri = 0; _ri < REQ_PAIRS.length; _ri++) {
-      var _rp = REQ_PAIRS[_ri];
-      BUB.push(makeReqBubble(_rp.req, _rp.tReq, _rp.tReq + 0.4, true));
-      BUB.push(makeReqBubble(_rp.bot, _rp.tBot, _rp.tEnd, false));
-    }
     wireEvents();
     resize();
     /* start wherever the page already is (e.g. reload mid-story) */
