@@ -1497,6 +1497,10 @@
     [[-2.2, 1.47, 2.6], [-2.35, 1.72, 1.42], [-2.32, 1.38, 0.35], [-2.36, 1.735, 0.08]]
   ];
   var HANDY = [0.35, 0.7, 0.55, 0.45, 0.35, 0.5, 0.4, 0.4, 0.3];
+  /* world units of the set that should stay inside the frame on a portrait
+     screen (the 16:9 shot cropped to a phone loses most of the room) */
+  var FRAME_W = 2.5;
+  var FRAME_MAX_PULL = 3.4;
 
   var DURS = [4.5, 8.5, 7, 10, 8, 10, 8, 7, 9];
   var TITLES = ['intro', 'the problem', 'install', 'pair', 'just ask', 'transfer', 'why qrfile', 'get started', 'download'];
@@ -1767,30 +1771,79 @@
       })(i);
     }
   }
+  /* the stage is 100svh tall on phones, which can differ from innerHeight
+     while browser chrome slides — drive the scroll math from the stage itself */
+  function stageH() { return el.player.clientHeight || window.innerHeight || 1; }
   function chapterTopFromTime(t) {
     var r = el.track.getBoundingClientRect();
-    var vh = window.innerHeight || 1;
+    var vh = stageH();
     var span = Math.max(1, r.height - vh);
     var top = r.top + (window.pageYOffset || 0);
     return top + (clamp(t, 0, TOTAL) / TOTAL) * span;
   }
+  /* every chapter change glides at the same speed and lands exactly on a
+     chapter start, so a swipe feels identical each time (native smooth scroll
+     varies its duration with distance and can be interrupted by momentum) */
+  var GLIDE_MS = 520;
+  var glideId = 0, glideRaf = 0, glideBehaviorSaved = null;
+  function endGlide() {
+    if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = 0; }
+    if (glideBehaviorSaved !== null) {
+      document.documentElement.style.scrollBehavior = glideBehaviorSaved;
+      glideBehaviorSaved = null;
+    }
+  }
+  function cancelGlide() { glideId++; endGlide(); }
   function scrollToChapter(i) {
     railPending = i;
     var t = SCENE_STARTS[i] + (i > 0 ? 0.06 : 0);
-    window.scrollTo({ top: chapterTopFromTime(t), behavior: REDUCED ? 'auto' : 'smooth' });
+    var target = chapterTopFromTime(t);
+    var from = window.pageYOffset || 0;
+    var dist = target - from;
+    cancelGlide();
+    if (REDUCED || Math.abs(dist) < 2) {
+      window.scrollTo(0, target);
+      return;
+    }
+    var id = glideId;
+    var t0 = performance.now();
+    if (glideBehaviorSaved === null) glideBehaviorSaved = document.documentElement.style.scrollBehavior || '';
+    /* drive the glide ourselves — CSS smooth scrolling would fight the frames */
+    document.documentElement.style.scrollBehavior = 'auto';
+    var frame = function (ts) {
+      if (id !== glideId) return;
+      var u = clamp((ts - t0) / GLIDE_MS, 0, 1);
+      var e = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+      window.scrollTo(0, from + dist * e);
+      if (u < 1) {
+        glideRaf = requestAnimationFrame(frame);
+      } else {
+        glideRaf = 0;
+        endGlide();
+      }
+    };
+    glideRaf = requestAnimationFrame(frame);
+  }
+  /* move exactly one chapter from wherever the film is (or is heading) */
+  function stepChapter(dir) {
+    var from = (railPending !== null) ? railPending : sceneIndex(filmPos());
+    var to = clamp(from + dir, 0, TITLES.length - 1);
+    if (to === from) return false;
+    scrollToChapter(to);
+    return true;
   }
   /* chapter the smooth glide is heading toward, if any */
   var railPending = null;
   /* film-time position implied by the current scroll offset (0…TOTAL) */
   function filmPos() {
     var r = el.track.getBoundingClientRect();
-    var vh = window.innerHeight || 1;
+    var vh = stageH();
     return clamp(-r.top / Math.max(1, r.height - vh), 0, 1) * TOTAL;
   }
   /* true while the film is covering the middle of the viewport */
   function filmCovers() {
     var r = el.track.getBoundingClientRect();
-    var vh = window.innerHeight || 1;
+    var vh = stageH();
     return r.top <= vh * 0.5 && r.bottom >= vh * 0.5;
   }
   function syncRail() {
@@ -1975,16 +2028,29 @@
     var a = REDUCED ? 0 : HANDY[idx];
     var mx = 0;
     var my = 0;
-    world.camera.position.set(
-      lerp(ck[0][0], ck[1][0], e) + Math.sin(time * 0.5) * 0.055 * a + mx,
-      lerp(ck[0][1], ck[1][1], e) + Math.sin(time * 0.42 + 1.2) * 0.04 * a + my,
-      lerp(ck[0][2], ck[1][2], e)
-    );
-    world.camera.lookAt(
-      lerp(ck[2][0], ck[3][0], e) + Math.sin(time * 0.55) * 0.06 * a - mx * 0.6,
-      lerp(ck[2][1], ck[3][1], e) + Math.sin(time * 0.47 + 0.8) * 0.035 * a - my * 0.6,
-      lerp(ck[2][2], ck[3][2], e)
-    );
+    var px = lerp(ck[0][0], ck[1][0], e) + Math.sin(time * 0.5) * 0.055 * a + mx;
+    var py = lerp(ck[0][1], ck[1][1], e) + Math.sin(time * 0.42 + 1.2) * 0.04 * a + my;
+    var pz = lerp(ck[0][2], ck[1][2], e);
+    var tx = lerp(ck[2][0], ck[3][0], e) + Math.sin(time * 0.55) * 0.06 * a - mx * 0.6;
+    var ty = lerp(ck[2][1], ck[3][1], e) + Math.sin(time * 0.47 + 0.8) * 0.035 * a - my * 0.6;
+    var tz = lerp(ck[2][2], ck[3][2], e);
+
+    /* portrait screens: back the seat off along the same line of sight until
+       the monitor + phone still fit across the frame instead of being cropped */
+    var asp = world.camera.aspect || 1;
+    var portrait = clamp((1.12 - asp) / 0.34, 0, 1);
+    if (portrait > 0.001) {
+      var dx = px - tx, dy = py - ty, dz = pz - tz;
+      var d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
+      var want = FRAME_W / (2 * Math.tan(world.camera.fov * Math.PI / 360) * Math.max(0.2, asp));
+      var k = 1 + (clamp(want / d, 1, FRAME_MAX_PULL) - 1) * portrait;
+      px = tx + dx * k;
+      py = ty + dy * k;
+      pz = tz + dz * k;
+    }
+
+    world.camera.position.set(px, py, pz);
+    world.camera.lookAt(tx, ty, tz);
   }
 
   /* ============================================================
@@ -1996,15 +2062,21 @@
     { el: null, u: 378 / 512, v: 170 / 300 }   /* card 2 · mcp server */
   ];
   function syncHotspots(now) {
-    var i, s, op, hit;
+    var i, s, op, hit, compact;
     if (!SPOTS[0].el) { SPOTS[0].el = el.spotApk; SPOTS[1].el = el.spotPip; }
     world.camera.updateMatrix();
     world.camera.updateMatrixWorld();
     op = ease3(ramp(now, S8 + 6.0, S8 + 7.0));
+    compact = el.player.classList.contains('compact');
     for (i = 0; i < SPOTS.length; i++) {
       s = SPOTS[i];
       if (!s.el) continue;
-      if (op > 0.005 && tmpV) {
+      if (compact) {
+        /* phones: the cards are docked by CSS above each other — the 3D screen
+           is far too small to aim at, and projecting would pin them to the edges */
+        s.el.style.left = '';
+        s.el.style.top = '';
+      } else if (op > 0.005 && tmpV) {
         /* canvas-pixel card centre → plane-local → world → screen % */
         tmpV.set((s.u - 0.5) * 1.86, (0.5 - s.v) * 1.02, 0.02);
         world.siteMesh.localToWorld(tmpV);
@@ -2035,7 +2107,7 @@
 
     /* scroll selects the chapter; the animation then plays out at real time */
     var r = el.track.getBoundingClientRect();
-    var vh = window.innerHeight || 1;
+    var vh = stageH();
     var span = Math.max(1, r.height - vh);
     var p = clamp(-r.top / span, 0, 1);
     var targetChapter = sceneIndex(p * TOTAL);
@@ -2142,6 +2214,8 @@
      ============================================================ */
   function wireEvents() {
     window.addEventListener('resize', resize);
+    /* mobile browsers report the new size a beat after rotating */
+    window.addEventListener('orientationchange', function () { setTimeout(resize, 260); });
     /* one replay per scroll burst: a burst that ends in the chapter it
        started in replays that chapter once; a burst that crosses into a
        new chapter is handled by the chapter-change reset instead */
@@ -2185,16 +2259,44 @@
       wheelAccum += dy;
       if (Math.abs(wheelAccum) < 50) { e.preventDefault(); return; }
       var dir = wheelAccum > 0 ? 1 : -1;
-      var from = (railPending !== null) ? railPending : sceneIndex(filmPos());
-      var to = clamp(from + dir, 0, TITLES.length - 1);
-      if (to !== from) {
+      if (stepChapter(dir)) {
         gestureStepped = true;
         wheelLockUntil = t + 350;
         e.preventDefault();
-        scrollToChapter(to);
       }
       /* else: at an end of the story — let native scrolling move the page */
     }, { passive: false });
+    /* one swipe = one chapter: the film owns vertical drags while it fills the
+       screen, so a flick can never skip a chapter or freeze mid-transition —
+       every gesture steps once and the glide lands on a chapter start */
+    var touchLive = false, touchStepped = false, touchY0 = 0, touchX0 = 0;
+    window.addEventListener('touchstart', function (e) {
+      touchLive = false;
+      touchStepped = false;
+      if (e.touches.length !== 1 || !filmCovers()) return;
+      touchLive = true;
+      touchY0 = e.touches[0].clientY;
+      touchX0 = e.touches[0].clientX;
+    }, { passive: true });
+    window.addEventListener('touchmove', function (e) {
+      if (!touchLive) return;
+      if (e.touches.length !== 1) { touchLive = false; return; }
+      var dy = touchY0 - e.touches[0].clientY;
+      var dx = touchX0 - e.touches[0].clientX;
+      /* a sideways drag belongs to the browser (back-swipe etc.), not the film */
+      if (!touchStepped && Math.abs(dx) > 18 && Math.abs(dx) > Math.abs(dy)) { touchLive = false; return; }
+      if (Math.abs(dx) > Math.abs(dy)) return;
+      /* own the drag from its first pixel, or native scrolling latches on and
+         keeps drifting underneath the glide */
+      e.preventDefault();
+      if (!touchStepped && Math.abs(dy) >= 30) {
+        touchStepped = true;
+        stepChapter(dy > 0 ? 1 : -1);
+      }
+    }, { passive: false });
+    function endTouch() { touchLive = false; }
+    window.addEventListener('touchend', endTouch, { passive: true });
+    window.addEventListener('touchcancel', endTouch, { passive: true });
     document.addEventListener('keydown', function (e) {
       var tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2216,15 +2318,24 @@
     });
   }
 
+  function narrowUI() {
+    return window.innerWidth <= 720 && window.innerHeight >= window.innerWidth;
+  }
+
   function resize() {
     if (!world) return;
     var w = el.player.clientWidth || window.innerWidth || 16;
     var h = el.player.clientHeight || window.innerHeight || 9;
+    /* phones: cap the render scale a little lower to keep the film smooth */
+    world.renderer.setPixelRatio(clamp(window.devicePixelRatio || 1, 1, w <= 720 ? 1.5 : 1.75));
     world.renderer.setSize(w, h, false);
     var a = w / Math.max(1, h);
     world.camera.aspect = a;
-    world.camera.fov = a < 1 ? 56 : (world.baseFov || 42);
+    /* widen the lens gradually as the frame gets taller instead of cropping */
+    var base = world.baseFov || 42;
+    world.camera.fov = clamp(base + (1 - a) * 26, base, 58);
     world.camera.updateProjectionMatrix();
+    el.player.classList.toggle('compact', narrowUI());
   }
 
   function failFallback() {
@@ -2251,7 +2362,7 @@
     resize();
     /* start wherever the page already is (e.g. reload mid-story) */
     var r = el.track.getBoundingClientRect();
-    var vh = window.innerHeight || 1;
+    var vh = stageH();
     var startP = clamp(-r.top / Math.max(1, r.height - vh), 0, 1);
     playbackChapter = sceneIndex(startP * TOTAL);
     playbackT = SCENE_STARTS[playbackChapter];

@@ -15,7 +15,7 @@
 }
 
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
@@ -26,6 +26,8 @@ body {
     radial-gradient(900px 500px at 10% 0%, rgba(34, 211, 238, 0.10), transparent 55%),
     var(--bg);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
   overflow-x: hidden;
 }
 
@@ -51,7 +53,7 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo
    ============================================================ */
 .film-track { position: relative; height: 900vh; }
 .film-sticky {
-  position: sticky; top: 0; height: 100vh; overflow: hidden;
+  position: sticky; top: 0; height: 100vh; height: 100svh; overflow: hidden;
   background: #05080f;
   border-top: 1px solid rgba(34, 211, 238, 0.12);
   border-bottom: 1px solid rgba(139, 92, 246, 0.12);
@@ -143,15 +145,22 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo
   background: var(--acc); border-color: #67e8f9; transform: scale(1.35);
   box-shadow: 0 0 14px rgba(34, 211, 238, 0.7);
 }
+/* fat-finger targets for the tiny dots on touch screens */
+@media (pointer: coarse) {
+  .rail-dot { position: relative; }
+  .rail-dot::after { content: ""; position: absolute; inset: -8px -16px; }
+}
 
 /* scroll hint */
 .scroll-hint {
-  position: absolute; z-index: 6; bottom: 20px; left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 6; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  left: 50%; transform: translateX(-50%);
   font-size: 11px; font-weight: 700; letter-spacing: 0.26em; text-transform: uppercase;
   color: var(--mut); pointer-events: none; transition: opacity 0.5s;
   animation: cueBob 2.2s ease-in-out infinite;
 }
 @keyframes cueBob { 50% { transform: translateX(-50%) translateY(5px); } }
+.scroll-hint .hint-touch { display: none; }
 
 /* WebGL failure fallback */
 .fallback-card { position: absolute; inset: 0; z-index: 9; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 30px; gap: 14px; background: #05080f; }
@@ -163,18 +172,86 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo
 .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.6s ease, transform 0.6s ease; }
 .reveal.in { opacity: 1; transform: none; }
 
-/* responsive */
-@media (max-width: 640px) {
+/* ============================================================
+   responsive — phones first
+   ============================================================ */
+@media (max-width: 720px) {
   .film-track { height: 700vh; }
-  .chapter-copy { left: 20px; right: 20px; top: 12vh; max-width: none; }
-  .chapter-copy h2 { font-size: clamp(30px, 8.6vw, 44px); }
-  .chapter-copy p { font-size: 13.5px; }
-  .cta-row .btn { font-size: 13px; padding: 11px 14px; }
-  .rail { top: 46%; }
-  .rail-dot { width: 9px; height: 9px; }
-  .screen-hotspot { padding: 8px 10px; border-radius: 11px; max-width: 88vw; }
+
+  /* copy sits closer to the top edge, tighter padding so the 3D set keeps
+     most of the screen; a stronger scrim keeps it readable over the scene */
+  .chapter-copy {
+    left: max(14px, env(safe-area-inset-left, 0px));
+    right: max(14px, env(safe-area-inset-right, 0px));
+    top: calc(env(safe-area-inset-top, 0px) + 8vh);
+    max-width: none;
+    padding: 16px 18px 18px;
+    border-radius: 16px;
+    background: linear-gradient(105deg, rgba(5, 9, 20, 0.78) 0%, rgba(5, 9, 20, 0.56) 62%, rgba(5, 9, 20, 0.24) 100%);
+    backdrop-filter: blur(8px) saturate(1.02);
+    -webkit-backdrop-filter: blur(8px) saturate(1.02);
+  }
+  .kicker { font-size: 10px; letter-spacing: 0.18em; margin-bottom: 7px; }
+  .chapter-copy h2 { font-size: clamp(27px, 8vw, 38px); line-height: 1.06; margin: 0 0 10px; }
+  .chapter-copy h2 code { font-size: 0.6em; padding: 1px 9px; }
+  .chapter-copy p { font-size: 13.5px; line-height: 1.58; max-width: none; }
+
+  .btn { width: 100%; font-size: 14px; padding: 12px 14px; }
+
+  .rail { right: max(9px, env(safe-area-inset-right, 0px)); top: 44%; gap: 13px; }
+  .rail-dot { width: 10px; height: 10px; }
+
+  .scroll-hint { font-size: 10px; letter-spacing: 0.2em; }
+
+  .screen-hotspot { max-width: 88vw; }
   .screen-hotspot .spot-label { font-size: 11px; white-space: normal; text-align: center; }
   .screen-hotspot .spot-tag { font-size: 8px; }
+
+  .fallback-card { padding: 22px 18px; gap: 12px; }
+  .fallback-card p { font-size: 13.5px; }
+}
+
+/* phones held upright: the monitor inside the film is too small to aim at,
+   so the two install cards dock above each other at the bottom instead of
+   being projected onto the 3D screen (js adds .compact to the stage) */
+.film-sticky.compact .screen-hotspot {
+  transform: translateX(-50%);
+  min-width: min(74vw, 310px);
+  padding: 10px 16px;
+  border-radius: 14px;
+  gap: 3px;
+}
+.film-sticky.compact .screen-hotspot.on { transform: translateX(-50%) scale(1); }
+.film-sticky.compact .screen-hotspot .spot-tag { font-size: 9px; }
+.film-sticky.compact .screen-hotspot .spot-label { font-size: 14px; white-space: normal; }
+.film-sticky.compact #spotApk { left: 50%; right: auto; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 136px); }
+.film-sticky.compact #spotPip { left: 50%; right: auto; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 66px); }
+
+/* phones on their side: keep the copy in a single left column so the film is
+   still visible next to it */
+@media (max-height: 540px) and (orientation: landscape) {
+  .chapter-copy {
+    left: max(14px, env(safe-area-inset-left, 0px));
+    right: auto;
+    width: min(48vw, 400px);
+    top: calc(env(safe-area-inset-top, 0px) + 14px);
+    padding: 12px 15px 13px;
+    border-radius: 14px;
+  }
+  .kicker { font-size: 9px; letter-spacing: 0.16em; margin-bottom: 4px; }
+  .chapter-copy h2 { font-size: clamp(19px, 3.4vw, 27px); line-height: 1.05; margin: 0 0 6px; }
+  .chapter-copy p { font-size: 11.5px; line-height: 1.45; }
+  .rail { top: 38%; gap: 10px; }
+  .rail-dot { width: 8px; height: 8px; }
+  .scroll-hint { font-size: 9px; }
+  .screen-hotspot { padding: 8px 12px; }
+  .screen-hotspot .spot-label { font-size: 11px; }
+}
+
+/* touch screens: the cue is a swipe, not a wheel */
+@media (hover: none) and (pointer: coarse) {
+  .scroll-hint .hint-hover { display: none; }
+  .scroll-hint .hint-touch { display: inline; }
 }
 
 @media (prefers-reduced-motion: reduce) {
