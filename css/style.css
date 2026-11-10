@@ -213,19 +213,16 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo
 
 /* phones held upright: the monitor inside the film is too small to aim at,
    so the two install cards dock above each other at the bottom instead of
-   being projected onto the 3D screen (js adds .compact to the stage) */
+   being projected onto the 3D screen (js adds .compact to the stage and sets
+   the position inline — only the look of the cards lives here) */
 .film-sticky.compact .screen-hotspot {
-  transform: translateX(-50%);
   min-width: min(74vw, 310px);
   padding: 10px 16px;
   border-radius: 14px;
   gap: 3px;
 }
-.film-sticky.compact .screen-hotspot.on { transform: translateX(-50%) scale(1); }
 .film-sticky.compact .screen-hotspot .spot-tag { font-size: 9px; }
 .film-sticky.compact .screen-hotspot .spot-label { font-size: 14px; white-space: normal; }
-.film-sticky.compact #spotApk { left: 50%; right: auto; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 136px); }
-.film-sticky.compact #spotPip { left: 50%; right: auto; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 66px); }
 
 /* phones on their side: keep the copy in a single left column so the film is
    still visible next to it */

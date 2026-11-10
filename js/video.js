@@ -63,10 +63,24 @@
      so the terminal only ever holds the one-time setup. */
   var TERM_SCRIPT = [
     { t: 13.3, pre: '$ ', text: 'pip install qrfile-mcp', cls: 'p' },
-    { t: 14.6, pre: '  ✓ ', text: 'qrfile-mcp installed', cls: 'o' },
-    { t: 15.9, pre: '  ✓ ', text: 'added to agent MCP config', cls: 'o' },
-    { t: 17.2, pre: '  ✓ ', text: 'attached — assistant ready', cls: 'o' }
+    { t: 17.35, pre: '  ✓ ', text: 'qrfile-mcp installed', cls: 'o' },
+    { t: 17.9, pre: '  ✓ ', text: 'added to agent MCP config', cls: 'o' },
+    { t: 18.45, pre: '  ✓ ', text: 'attached — assistant ready', cls: 'o' }
   ];
+
+  /* the install bar: 0 → 100% with two realistic stalls, pure fn of film time */
+  var T_INST_A = 14.15, T_INST_B = 17.15;
+  var INST_STOPS = [[0, 0], [0.16, 0.29], [0.33, 0.37], [0.57, 0.72], [0.71, 0.78], [0.88, 0.96], [1, 1]];
+  function installProgress(now) {
+    var u = clamp((now - T_INST_A) / (T_INST_B - T_INST_A), 0, 1);
+    for (var i = 1; i < INST_STOPS.length; i++) {
+      if (u <= INST_STOPS[i][0]) {
+        var a = INST_STOPS[i - 1], b = INST_STOPS[i];
+        return lerp(a[1], b[1], ease3((u - a[0]) / ((b[0] - a[0]) || 1)));
+      }
+    }
+    return 1;
+  }
 
   var term = {
     canvas: cnv(1536, 900),
@@ -92,11 +106,13 @@
         acc += Math.floor(L.shown);
       }
       var blink = Math.floor(time * 2.2) % 2;
-      var key = used + ':' + acc;
+      var prog = installProgress(now);
+      var pct = Math.round(prog * 100);
+      var key = used + ':' + acc + ':' + pct;
       if (key !== this.lastKey || blink !== this.lastBlink) {
         this.lastKey = key;
         this.lastBlink = blink;
-        drawTerminal(blink);
+        drawTerminal(blink, prog);
       }
     }
   };
@@ -105,7 +121,7 @@
   term.texture = new THREE.CanvasTexture(term.canvas);
   term.texture.anisotropy = 4;
 
-  function drawTerminal(blink) {
+  function drawTerminal(blink, prog) {
     var x = term.canvas.getContext('2d');
     x.setTransform(3, 0, 0, 3, 0, 0);
     var W = 512, H = 300;
@@ -120,6 +136,8 @@
     x.fillText('~ /qrfile — mcp', 66, 19);
 
     x.font = '600 15px "JetBrains Mono", monospace';
+    prog = prog === undefined ? 0 : prog;
+    var barOn = prog > 0.0005;
     var y = 58, i, L;
     for (i = 0; i < term.lines.length; i++) {
       L = term.lines[i];
@@ -128,6 +146,50 @@
       x.fillStyle = L.cls === 'd' ? '#9fb2d1' : '#e6eefc';
       x.fillText(L.text.slice(0, Math.floor(L.shown)), 20 + x.measureText(L.pre).width, y);
       y += 30;
+    }
+    /* the install bar — 0% → 100%, then a green "done" state.
+       lives in the terminal's right column so the chapter copy (which
+       overlays the left of the screen) never covers it. */
+    if (barOn) {
+      var bw = 104, bh = 10, bx = 398, by = 206;
+      var done = prog >= 0.9995;
+      /* header */
+      x.fillStyle = done ? '#4ade9b' : '#5d6b85';
+      x.font = '600 9px "JetBrains Mono", monospace';
+      x.fillText(done ? 'install complete' : 'unpacking', bx, by - 30);
+      /* percentage readout */
+      x.fillStyle = done ? '#6ee7b7' : '#8ee9ff';
+      x.font = '700 20px "JetBrains Mono", monospace';
+      x.fillText((done ? '100' : Math.round(prog * 100)) + '%', bx, by - 8);
+      /* track */
+      x.fillStyle = 'rgba(148,178,255,0.10)';
+      rr(x, bx, by, bw, bh, bh / 2); x.fill();
+      /* fill */
+      var fw = Math.max(bh, bw * prog);
+      var fg = x.createLinearGradient(bx, 0, bx + bw, 0);
+      if (done) {
+        fg.addColorStop(0, '#34d399'); fg.addColorStop(1, '#6ee7b7');
+      } else {
+        fg.addColorStop(0, '#0e7490'); fg.addColorStop(0.6, '#22d3ee'); fg.addColorStop(1, '#a5f3fc');
+      }
+      x.save();
+      x.shadowColor = done ? 'rgba(52,211,153,0.55)' : 'rgba(34,211,238,0.55)';
+      x.shadowBlur = 10;
+      x.fillStyle = fg;
+      rr(x, bx, by, fw, bh, bh / 2); x.fill();
+      x.restore();
+      /* leading edge highlight while it is still moving */
+      if (!done) {
+        x.fillStyle = 'rgba(255,255,255,0.85)';
+        x.fillRect(bx + fw - 2, by - 1.5, 2, bh + 3);
+      }
+      /* tick marks under the track */
+      x.fillStyle = 'rgba(148,178,255,0.18)';
+      for (var tk = 1; tk < 4; tk++) x.fillRect(bx + (bw / 4) * tk, by + bh + 4, 1, 3);
+      /* the package line, pip-style */
+      x.fillStyle = done ? '#34d399' : '#3f4d68';
+      x.font = '500 9px "JetBrains Mono", monospace';
+      x.fillText(done ? 'qrfile-mcp ✓' : 'qrfile-mcp', bx, by + bh + 20);
     }
     /* caret */
     if (blink) { x.fillStyle = '#22d3ee'; x.fillRect(20, y - 13, 5, 12); }
@@ -157,7 +219,9 @@
       if (changed) this.draw();
     },
     key: function () {
-      return this.state + '|' + this.ui.digits + '|' + (this.ui.rows || []).join(',') + '|' + (this.state === 'scan' ? Math.floor(this.ui.sweep * 40) : 0);
+      var cv = this.state === 'scan' ? cameraView() : null;
+      var cvk = cv ? (Math.round(cv.x) + ',' + Math.round(cv.y) + ',' + Math.round(cv.roll * 100) + ',' + Math.round(cv.zoom * 100)) : '';
+      return this.state + '|' + this.ui.digits + '|' + (this.ui.confirmed ? 'c' : '_') + '|' + (this.ui.rows || []).join(',') + '|' + (this.state === 'scan' ? Math.floor(this.ui.sweep * 40) : 0) + '|' + cvk;
     },
     drawIfChanged: function (time) {
       var k = this.key();
@@ -167,6 +231,34 @@
   };
   phoneScr.texture = new THREE.CanvasTexture(phoneScr.canvas);
   phoneScr.texture.anisotropy = 4;
+
+  /* the phone's live pose → what its camera sees. the viewfinder is a window
+     into the room, so the room slides opposite to the hand and rolls with it.
+     this is what makes the feed feel like a camera instead of a sticker.
+     driven by the hand-held drift only (not the pose blend), so the view
+     stays centred while the phone lifts and only wobbles as the hand does. */
+  var CAM_GAIN = 620;
+  var handDrift = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 };
+  window.__camView = function () { return cameraView(); };
+  window.__hd = handDrift;
+  function cameraView() {
+    var d = handDrift;
+    /* the view is driven ONLY by the hand, so the phone and its feed stay
+       locked together — that coupling is the whole illusion. a small rotation
+       of the phone swings the image a long way, which is why the rotation
+       terms carry the gain: ~1.3° of roll-off should move the frame ~15px. */
+    return {
+      /* hand right → scene slides left; hand up → scene slides down.
+         the position and rotation terms are driven by the same wave, so they
+         must ADD here — with opposite signs they cancel and the view only
+         moves sideways. gains are tuned so the code stays inside the reticle
+         while it wanders: a wobble, not a lurch. */
+      x: clamp(-(d.x * 520 + d.ry * 420), -34, 34),
+      y: clamp(d.y * 520 + d.rx * 520, -34, 34),
+      roll: clamp(-d.rz * 0.85, -0.035, 0.035),
+      zoom: clamp(1 + d.z * 1.6, 0.99, 1.01)
+    };
+  }
 
   function rr(x, rx, y, w, h, r) {
     x.beginPath();
@@ -211,7 +303,17 @@
       x.fillText('QRFile', cx - 47, cy + 74);
       x.fillStyle = '#5d6b85';
       x.font = '500 12px Inter, system-ui, sans-serif';
-      x.fillText('waiting for a scan…', cx - 58, cy + 100);
+      x.fillText('waiting for files…', cx - 54, cy + 100);
+      /* the pairing entry, like the app's inbox screen */
+      x.fillStyle = 'rgba(34,211,238,0.14)';
+      rr(x, 58, 366, 140, 34, 17); x.fill();
+      x.strokeStyle = 'rgba(34,211,238,0.50)'; x.lineWidth = 1;
+      rr(x, 58, 366, 140, 34, 17); x.stroke();
+      x.fillStyle = '#a8f4ff';
+      x.font = '700 11px Inter, system-ui, sans-serif';
+      x.textAlign = 'center';
+      x.fillText('Scan pairing QR code', 128, 387);
+      x.textAlign = 'left';
       /* bottom pill */
       x.fillStyle = 'rgba(34,211,238,0.10)';
       rr(x, 48, 430, 160, 30, 15); x.fill();
@@ -221,101 +323,262 @@
     }
 
     if (st === 'scan') {
-      x.fillStyle = '#8ea3c5';
-      x.font = '700 14px Inter, system-ui, sans-serif';
-      x.fillText('Scan to pair', 88, 80);
-      /* viewfinder */
-      var vx = M + 33, vy = 120, vs = W - 2 * M - 66, v = vs;
-      var corners = [[vx, vy, 1, 1], [vx + v, vy, -1, 1], [vx, vy + v, 1, -1], [vx + v, vy + v, -1, -1]];
+      /* ---- camera viewfinder: this is the phone LOOKING at the QR on the
+         computer screen, not displaying one. full-bleed preview, chrome on
+         top, reticle in the middle, confirm sheet at the bottom. ---- */
+      var sx0 = M, sy0 = M, sw = W - 2 * M, sh = H - 2 * M;
       var done = phoneScr.ui.digits >= 4;
-      x.strokeStyle = done ? '#34d399' : '#22d3ee'; x.lineWidth = 4;
+
+      /* the hand's pose drives the view: the room slides against the motion
+         and rolls with it, exactly like a camera app. the chrome below stays
+         pinned to the glass, so only the world moves. */
+      var cv = cameraView();
+      var ccx = sx0 + sw / 2, ccy = sy0 + sh / 2;
+      /* map a scene point through the same transform the feed uses */
+      var camMap = function (px, py) {
+        var ox = (px - ccx) * cv.zoom, oy = (py - ccy) * cv.zoom;
+        var cr = Math.cos(cv.roll), sr = Math.sin(cv.roll);
+        return { x: ccx + ox * cr - oy * sr + cv.x, y: ccy + ox * sr + oy * cr + cv.y };
+      };
+
+      x.save();
+      /* overscan so the shifted/zoomed feed never shows an edge */
+      x.beginPath(); x.rect(sx0, sy0, sw, sh); x.clip();
+      x.translate(ccx + cv.x, ccy + cv.y);
+      x.rotate(cv.roll);
+      x.scale(cv.zoom, cv.zoom);
+      x.translate(-ccx, -ccy);
+
+      /* the camera feed: a dim room with the monitor in it, seen at an angle */
+      var feed = x.createLinearGradient(0, sy0, 0, sy0 + sh);
+      feed.addColorStop(0, '#1b2438');
+      feed.addColorStop(0.5, '#111a2b');
+      feed.addColorStop(1, '#080e18');
+      x.fillStyle = feed;
+      x.fillRect(sx0 - sw * 0.15, sy0 - sh * 0.15, sw * 1.3, sh * 1.3);
+
+      /* desk surface — a warm band low in the frame, lit by the screen */
+      var deskG = x.createLinearGradient(0, sy0 + sh * 0.56, 0, sy0 + sh);
+      deskG.addColorStop(0, 'rgba(96,66,44,0)');
+      deskG.addColorStop(0.5, 'rgba(104,72,48,0.60)');
+      deskG.addColorStop(1, 'rgba(118,82,56,0.85)');
+      x.fillStyle = deskG;
+      x.fillRect(sx0 - sw * 0.15, sy0 + sh * 0.56, sw * 1.3, sh * 0.6);
+      /* desk edge highlight */
+      x.fillStyle = 'rgba(190,150,108,0.20)';
+      x.fillRect(sx0 - sw * 0.15, sy0 + sh * 0.565, sw * 1.3, 1.5);
+
+      /* the monitor, tilted — a trapezoid, as a hand-held camera sees it */
+      var mx0 = sx0 + sw * 0.10, mx1 = sx0 + sw * 0.96;
+      var mtop = sy0 + sh * 0.15, mbot = sy0 + sh * 0.545;
+      var skew = sw * 0.055;
+      /* bezel — near-black so the monitor reads as an object in the room */
+      x.fillStyle = '#04070e';
+      x.beginPath();
+      x.moveTo(mx0 + skew, mtop);
+      x.lineTo(mx1, mtop + sh * 0.014);
+      x.lineTo(mx1 - skew, mbot);
+      x.lineTo(mx0, mbot - sh * 0.014);
+      x.closePath();
+      x.fill();
+      /* its screen — the only real light in the room */
+      x.save();
+      x.shadowColor = 'rgba(34,211,238,0.85)';
+      x.shadowBlur = 40;
+      var scrG = x.createLinearGradient(0, mtop, 0, mbot);
+      scrG.addColorStop(0, '#2b5f80');
+      scrG.addColorStop(1, '#1b435c');
+      x.fillStyle = scrG;
+      x.beginPath();
+      x.moveTo(mx0 + skew + 7, mtop + 7);
+      x.lineTo(mx1 - 7, mtop + sh * 0.014 + 7);
+      x.lineTo(mx1 - skew - 7, mbot - 7);
+      x.lineTo(mx0 + 7, mbot - sh * 0.014 - 7);
+      x.closePath();
+      x.fill();
+      x.restore();
+      /* the monitor's stand, so it sits on the desk */
+      x.fillStyle = '#04070e';
+      x.fillRect(sx0 + sw * 0.46, mbot - 2, sw * 0.09, sh * 0.055);
+      x.fillRect(sx0 + sw * 0.34, mbot + sh * 0.05, sw * 0.33, sh * 0.012);
+      /* faint chat lines on that screen, so it reads as the qrbot window */
+      x.fillStyle = 'rgba(190,225,250,0.20)';
+      x.fillRect(mx0 + sw * 0.07, mtop + sh * 0.042, sw * 0.26, 3);
+      x.fillRect(mx0 + sw * 0.07, mtop + sh * 0.058, sw * 0.19, 3);
+      x.fillRect(mx0 + sw * 0.11, mtop + sh * 0.080, sw * 0.23, 3);
+
+      /* the QR, sitting ON that screen — it drifts through the viewfinder as
+         the hand moves, which is the whole point: the code is in the world,
+         the reticle is on the glass. */
+      var rv = sw * 0.58, rx0 = sx0 + (sw - rv) / 2, ry0 = sy0 + sh * 0.175;
+      var qs = rv * 0.56;
+      var qc = camMap(rx0 + rv / 2, ry0 + rv / 2);
+      x.save();
+      x.translate(qc.x, qc.y);
+      x.rotate(cv.roll);
+      x.scale(cv.zoom, cv.zoom);
+      x.transform(1, 0.03, -0.045, 0.93, 0, 0);   /* perspective squash */
+      /* its own glow on the glass */
+      x.save();
+      x.shadowColor = 'rgba(220,240,255,0.55)';
+      x.shadowBlur = 16;
+      x.fillStyle = 'rgba(238,246,255,0.98)';
+      x.fillRect(-qs / 2 - 3, -qs / 2 - 3, qs + 6, qs + 6);
+      x.restore();
+      drawQrBlock(x, -qs / 2, -qs / 2, qs, done);
+      x.restore();
+
+      /* end of the world transform — everything below is fixed to the glass */
+      x.restore();
+
+      /* sensor grain — cheap, but it sells "camera" instantly */
+      var grnd = lcg(4242 + Math.floor(phoneScr.ui.sweep * 9));
+      x.fillStyle = 'rgba(180,205,240,0.055)';
+      for (var gi = 0; gi < 110; gi++) {
+        x.fillRect(sx0 + grnd() * sw, sy0 + grnd() * sh, 1.4, 1.4);
+      }
+
+      /* vignette, like a real lens — light enough that the room still reads */
+      var vig = x.createRadialGradient(sx0 + sw / 2, sy0 + sh * 0.42, sw * 0.30, sx0 + sw / 2, sy0 + sh * 0.42, sw * 1.05);
+      vig.addColorStop(0, 'rgba(0,0,0,0)');
+      vig.addColorStop(0.65, 'rgba(2,5,12,0.22)');
+      vig.addColorStop(1, 'rgba(2,5,12,0.72)');
+      x.fillStyle = vig;
+      x.fillRect(sx0, sy0, sw, sh);
+
+      /* ---- top chrome ---- */
+      x.fillStyle = 'rgba(4,8,16,0.55)';
+      x.fillRect(sx0, sy0, sw, 46);
+      /* close */
+      x.strokeStyle = 'rgba(220,235,255,0.75)'; x.lineWidth = 2;
+      x.beginPath();
+      x.moveTo(sx0 + 18, sy0 + 17); x.lineTo(sx0 + 28, sy0 + 27);
+      x.moveTo(sx0 + 28, sy0 + 17); x.lineTo(sx0 + 18, sy0 + 27);
+      x.stroke();
+      x.fillStyle = '#eaf3ff';
+      x.font = '700 13px Inter, system-ui, sans-serif';
+      x.textAlign = 'center';
+      x.fillText('Scan QR code', W / 2, sy0 + 27);
+      x.textAlign = 'left';
+      /* torch */
+      x.fillStyle = 'rgba(220,235,255,0.10)';
+      x.beginPath(); x.arc(sx0 + sw - 24, sy0 + 22, 13, 0, 6.29); x.fill();
+      x.fillStyle = '#cfe2ff';
+      x.beginPath();
+      x.moveTo(sx0 + sw - 27, sy0 + 15); x.lineTo(sx0 + sw - 21, sy0 + 15);
+      x.lineTo(sx0 + sw - 25, sy0 + 22); x.lineTo(sx0 + sw - 20, sy0 + 22);
+      x.lineTo(sx0 + sw - 28, sy0 + 31); x.lineTo(sx0 + sw - 25, sy0 + 23);
+      x.lineTo(sx0 + sw - 29, sy0 + 23);
+      x.closePath(); x.fill();
+
+      /* ---- the reticle: brackets that lock on once the code is read ---- */
+      var lock = done ? 1 : clamp(phoneScr.ui.sweep * 1.6, 0, 1);
+      var bc = done ? '#34d399' : 'rgba(103,232,249,' + (0.55 + 0.35 * lock).toFixed(2) + ')';
+      x.strokeStyle = bc; x.lineWidth = 3; x.lineCap = 'round';
+      var arm = rv * 0.20;
+      var corners = [[rx0, ry0, 1, 1], [rx0 + rv, ry0, -1, 1], [rx0, ry0 + rv, 1, -1], [rx0 + rv, ry0 + rv, -1, -1]];
       for (var ci = 0; ci < 4; ci++) {
         var cc = corners[ci];
         x.beginPath();
-        x.moveTo(cc[0] + cc[2] * (v * 0.28), cc[1]);
-        x.lineTo(cc[0], cc[1]); x.lineTo(cc[0], cc[1] + cc[3] * (v * 0.28));
+        x.moveTo(cc[0] + cc[2] * arm, cc[1]);
+        x.lineTo(cc[0], cc[1]); x.lineTo(cc[0], cc[1] + cc[3] * arm);
         x.stroke();
       }
-      x.strokeStyle = 'rgba(148,178,255,0.25)'; x.lineWidth = 2;
-      x.strokeRect(vx, vy, v, v);
-      /* camera preview: the QR on your monitor, seen through the lens */
-      var ps = Math.round(v * 0.62), px0 = vx + (v - ps) / 2, py0 = vy + (v - ps) / 2;
-      x.fillStyle = 'rgba(8,14,26,0.55)';
-      x.fillRect(vx + 2, vy + 2, v - 4, v - 4);
-      x.fillStyle = '#f3f7ff';
-      rr(x, px0, py0, ps, ps, 5); x.fill();
-      var on = Math.max(2, Math.floor((ps - 10) / 9));
-      var qx = px0 + 5, qy = py0 + 5, qs = ps - 10;
-      var qrnd = lcg(31);
-      x.fillStyle = '#10182a';
-      for (var gy = 0; gy < 9; gy++) {
-        for (var gx = 0; gx < 9; gx++) {
-          if (qrnd() > 0.42) x.fillRect(qx + gx * on + 1, qy + gy * on + 1, on - 2, on - 2);
-        }
-      }
-      /* three finder corners */
-      var fS = on * 2.6;
-      x.fillStyle = '#10182a';
-      x.fillRect(qx, qy, fS, fS);
-      x.fillRect(qx + qs - fS, qy, fS, fS);
-      x.fillRect(qx, qy + qs - fS, fS, fS);
-      x.fillStyle = '#f3f7ff';
-      var fIn = on;
-      x.fillRect(qx + fS / 2 - fIn / 2, qy + fS / 2 - fIn / 2, fIn, fIn);
-      x.fillRect(qx + qs - fS + fS / 2 - fIn / 2, qy + fS / 2 - fIn / 2, fIn, fIn);
-      x.fillRect(qx + fS / 2 - fIn / 2, qy + qs - fS + fS / 2 - fIn / 2, fIn, fIn);
-      /* a faint blue vignette, like a real camera feed */
-      var vig = x.createRadialGradient(vx + v / 2, vy + v / 2, v * 0.2, vx + v / 2, vy + v / 2, v * 0.72);
-      vig.addColorStop(0, 'rgba(0,0,0,0)');
-      vig.addColorStop(1, 'rgba(15,35,70,0.32)');
-      x.fillStyle = vig;
-      x.fillRect(vx + 2, vy + 2, v - 4, v - 4);
-      /* tap-to-focus box around the code, like a real camera app */
+      x.lineCap = 'butt';
+
+      /* the scan laser, sweeping the reticle while it is still reading */
       if (!done) {
-        x.strokeStyle = blink ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.4)';
-        x.lineWidth = 2;
-        x.strokeRect(px0 - 8, py0 - 8, ps + 16, ps + 16);
-        x.fillStyle = blink ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.45)';
-        x.fillRect(px0 + ps / 2 - 1, py0 + ps + 10, 2, 8);
-        x.strokeStyle = 'rgba(255,255,255,0.5)';
-        x.lineWidth = 1.5;
-        x.beginPath();
-        x.moveTo(px0 + ps / 2 - 6, py0 + ps + 21);
-        x.lineTo(px0 + ps / 2 + 6, py0 + ps + 21);
-        x.stroke();
-      }
-      /* sweep line (only while the code is still being read) */
-      if (!done) {
-        var sy = vy + 10 + (v - 20) * ease3(phoneScr.ui.sweep);
-        var sg = x.createLinearGradient(vx, 0, vx + v, 0);
-        sg.addColorStop(0, 'rgba(34,211,238,0)'); sg.addColorStop(0.5, 'rgba(103,232,249,0.95)'); sg.addColorStop(1, 'rgba(34,211,238,0)');
-        x.fillStyle = sg;
-        x.fillRect(vx + 6, sy, v - 12, 3);
-      }
-      /* digits */
-      var code = '4281';
-      x.font = '700 34px "JetBrains Mono", monospace';
-      var shown = code.slice(0, phoneScr.ui.digits);
-      var gap = 17;
-      var startX = 128 - (4 * x.measureText('0').width + 3 * gap) / 2 + x.measureText('0').width / 2;
-      for (var di = 0; di < 4; di++) {
-        var dpos = startX + di * (x.measureText('0').width + gap);
-        if (di < phoneScr.ui.digits) {
-          x.fillStyle = '#67e8f9';
-          x.fillText(code[di], dpos - x.measureText(code[di]).width / 2, 320);
-        } else {
-          x.fillStyle = 'rgba(148,178,255,0.25)';
-          x.fillText('•', dpos - x.measureText('•').width / 2, 318);
-        }
-      }
-      if (done) {
-        x.fillStyle = '#34d399';
-        x.font = '800 13px Inter, system-ui, sans-serif';
-        x.fillText('✓ code read — pairing', 106, 350);
+        var ly = ry0 + rv * ease3(phoneScr.ui.sweep);
+        var lg = x.createLinearGradient(rx0, 0, rx0 + rv, 0);
+        lg.addColorStop(0, 'rgba(34,211,238,0)');
+        lg.addColorStop(0.5, 'rgba(125,238,255,0.95)');
+        lg.addColorStop(1, 'rgba(34,211,238,0)');
+        x.save();
+        x.shadowColor = 'rgba(103,232,249,0.9)'; x.shadowBlur = 10;
+        x.fillStyle = lg;
+        x.fillRect(rx0 + 4, ly, rv - 8, 2.5);
+        x.restore();
       } else {
-        x.fillStyle = 'rgba(148,178,255,0.75)';
-        x.font = '600 12px Inter, system-ui, sans-serif';
-        x.fillText(blink ? 'pairing…' : 'pairing', 118, 350);
+        /* a quick green confirm pulse on the reticle */
+        x.save();
+        x.shadowColor = 'rgba(52,211,153,0.8)'; x.shadowBlur = 14;
+        x.strokeStyle = 'rgba(52,211,153,0.55)'; x.lineWidth = 2;
+        x.strokeRect(rx0, ry0, rv, rv);
+        x.restore();
+      }
+
+      /* ---- bottom sheet: the hint, then the 4-digit confirm ---- */
+      var sheetTop = sy0 + sh * 0.66;
+      var sg2 = x.createLinearGradient(0, sheetTop, 0, sy0 + sh);
+      sg2.addColorStop(0, 'rgba(4,8,16,0)');
+      sg2.addColorStop(0.35, 'rgba(4,8,16,0.92)');
+      sg2.addColorStop(1, 'rgba(4,8,16,0.98)');
+      x.fillStyle = sg2;
+      x.fillRect(sx0, sheetTop, sw, sh - (sheetTop - sy0));
+
+      if (!done) {
+        x.fillStyle = '#eaf3ff';
+        x.font = '700 13px Inter, system-ui, sans-serif';
+        x.textAlign = 'center';
+        x.fillText('Point at the QR on your screen', W / 2, sheetTop + 34);
+        x.fillStyle = 'rgba(148,178,255,0.65)';
+        x.font = '500 11px Inter, system-ui, sans-serif';
+        x.fillText('qrbot put it in the chat — hold steady', W / 2, sheetTop + 52);
+        /* a small "searching" indicator */
+        var dotsN = Math.floor(phoneScr.ui.sweep * 6) % 3;
+        for (var di2 = 0; di2 < 3; di2++) {
+          x.fillStyle = di2 === dotsN ? '#67e8f9' : 'rgba(103,232,249,0.22)';
+          x.beginPath(); x.arc(W / 2 - 12 + di2 * 12, sheetTop + 74, 3, 0, 6.29); x.fill();
+        }
+        x.textAlign = 'left';
+      } else {
+        /* scan joined → the phone GENERATES and displays the code, all four
+           digits at once (PairingActivity: "Confirm on your PC" + "Enter this
+           code on your PC"). nothing is typed on the phone — the human reads
+           it and types it in the PC chat; the app waits for confirmation. */
+        var code = '4 2 8 1';
+        var conf = phoneScr.ui.confirmed;
+        x.textAlign = 'center';
+        if (!conf) {
+          x.fillStyle = '#eaf3ff';
+          x.font = '800 15px Inter, system-ui, sans-serif';
+          x.fillText('Confirm on your PC', W / 2, sheetTop + 24);
+          x.fillStyle = 'rgba(148,178,255,0.72)';
+          x.font = '500 10px Inter, system-ui, sans-serif';
+          x.fillText('“my mac” · waiting for confirmation…', W / 2, sheetTop + 42);
+          /* the code card */
+          x.fillStyle = 'rgba(52,211,153,0.09)';
+          rr(x, 44, sheetTop + 52, W - 88, 96, 11); x.fill();
+          x.strokeStyle = 'rgba(52,211,153,0.32)'; x.lineWidth = 1;
+          rr(x, 44, sheetTop + 52, W - 88, 96, 11); x.stroke();
+          x.fillStyle = '#67e8f9';
+          x.font = '700 9px Inter, system-ui, sans-serif';
+          x.fillText('Enter this code on your PC', W / 2, sheetTop + 72);
+          x.shadowColor = 'rgba(52,211,153,0.55)'; x.shadowBlur = 12;
+          x.fillStyle = 'rgba(110,231,183,0.98)';
+          x.font = '700 31px "JetBrains Mono", monospace';
+          x.fillText(code, W / 2, sheetTop + 110);
+          x.shadowBlur = 0;
+          x.fillStyle = 'rgba(148,178,255,0.62)';
+          x.font = '500 8.5px Inter, system-ui, sans-serif';
+          x.fillText('type all four digits in the chat', W / 2, sheetTop + 128);
+          x.fillText('on your computer when qrbot asks', W / 2, sheetTop + 139);
+        } else {
+          /* confirmed' — code card hides, like the app's success state */
+          x.fillStyle = '#34d399';
+          x.font = '800 15px Inter, system-ui, sans-serif';
+          x.fillText('✓ paired successfully', W / 2, sheetTop + 26);
+          x.fillStyle = 'rgba(148,178,255,0.72)';
+          x.font = '500 10px Inter, system-ui, sans-serif';
+          x.fillText('“my mac” · ready to receive files', W / 2, sheetTop + 44);
+          x.fillStyle = 'rgba(52,211,153,0.16)';
+          x.beginPath(); x.arc(W / 2, sheetTop + 92, 34, 0, 6.29); x.fill();
+          x.strokeStyle = 'rgba(52,211,153,0.6)'; x.lineWidth = 2.5;
+          x.beginPath();
+          x.moveTo(W / 2 - 12, sheetTop + 92); x.lineTo(W / 2 - 3, sheetTop + 101); x.lineTo(W / 2 + 14, sheetTop + 80);
+          x.stroke();
+        }
+        x.textAlign = 'left';
       }
     }
 
@@ -483,15 +746,17 @@
      as the chat UI it actually is. shown from ch4 on under the site.
      ============================================================ */
   var CHAT = [
-    { t: 33.9, me: false, text: 'paired ✓ inbox live — sending…' },
-    { t: 36.5, me: true,  text: 'move report.pdf to my phone' },
-    { t: 39.3, me: false, text: 'got it! opening a private lane…' },
-    { t: 40.7, me: false, text: '✓ report.pdf is in your inbox' },
-    { t: 42.2, me: true,  text: 'send notes-dev.pdf too' },
-    { t: 43.6, me: false, text: '✓ notes-dev.pdf is in your inbox' },
-    { t: 44.9, me: true,  text: 'now mix-tracks.zip + telemetry.json' },
-    { t: 46.2, me: false, text: '✓ mix-tracks.zip delivered' },
-    { t: 47.0, me: false, text: '✓ telemetry.json delivered' },
+    { t: 27.35, me: false, text: '✓ scanned — type the 4 digits your phone shows.' },
+    { t: 29.3, me: true, mono: true, text: '4281' },
+    { t: 29.6, me: false, text: 'paired ✓ inbox live — sending…' },
+    { t: 32.0, me: true,  text: 'move report.pdf to my phone' },
+    { t: 32.9, me: false, text: 'got it! streaming it over your Wi-Fi…' },
+    { t: 37.05, me: false, text: '✓ report.pdf is in your inbox' },
+    { t: 38.6, me: true,  text: 'send notes-dev.pdf too' },
+    { t: 42.2, me: false, text: '✓ notes-dev.pdf is in your inbox' },
+    { t: 43.0, me: true,  text: 'now mix-tracks.zip + telemetry.json' },
+    { t: 46.8, me: false, text: '✓ mix-tracks.zip delivered' },
+    { t: 47.6, me: false, text: '✓ telemetry.json delivered' },
     { t: 49.3, me: true,  text: 'so nothing leaves the room?' },
     { t: 50.7, me: false, text: 'never. LAN only — nothing leaves the room.' }
   ];
@@ -500,11 +765,25 @@
     var rows = [], typing = -1, i;
     for (i = 0; i < CHAT.length; i++) {
       if (now >= CHAT[i].t) rows.push(i);
-      else if (now >= CHAT[i].t - 1.0) { typing = i; break; }
+      else if (!CHAT[i].me && now >= CHAT[i].t - 0.8) { typing = i; break; }
     }
     /* the pairing QR rides the message flow as qrbot's attachment */
-    var card = now >= T_QR_ON && now < T_QR_END - 0.12;
+    var card = now >= T_QR_ON && now < T_QR_END - 0.1;
     return { rows: rows, typing: typing, card: card };
+  }
+
+  /* what the user is typing into the composer right before a message sends
+     — the pace follows the message length, and never rushes past read speed */
+  function inputTyping(now) {
+    for (var i = 0; i < CHAT.length; i++) {
+      var m = CHAT[i];
+      if (!m.me) continue;
+      var dur = Math.min(2.4, Math.max(1.25, 0.11 * m.text.length + 0.35));
+      if (now < m.t - dur - 0.15 || now >= m.t) continue;
+      var p = clamp((now - (m.t - dur - 0.15)) / dur, 0, 1);
+      return { text: m.text, shown: Math.floor(p * m.text.length) };
+    }
+    return null;
   }
 
   /* the QR as a chat attachment — painted straight into the chat canvas
@@ -608,7 +887,9 @@
     x.fillText('LAN only', 456, 21);
 
     /* ---- message rows: centered column, bot left / you right ---- */
-    x.font = '600 13.5px Inter, system-ui, sans-serif';
+    var FONT_BODY = '600 13.5px Inter, system-ui, sans-serif';
+    var FONT_CODE = '700 14px "JetBrains Mono", monospace';
+    x.font = FONT_BODY;
     var y = lay.card ? 208 : 66, RH = 30, by;
     var capRow = lay.card ? 2 : 4;
     var visibleRows = lay.rows.length > capRow ? lay.rows.slice(lay.rows.length - capRow) : lay.rows.slice();
@@ -620,14 +901,15 @@
       x.font = '600 8px "JetBrains Mono", monospace';
       var dv = 'today 21:42 · private lane · your LAN';
       x.fillText(dv, (W - x.measureText(dv).width) / 2, 50.5);
-      x.font = '600 13.5px Inter, system-ui, sans-serif';
+      x.font = FONT_BODY;
     }
     for (i = 0; i < visibleRows.length; i++) {
       m = CHAT[visibleRows[i]];
       /* rows pop in whole when they arrive (typing-dots handle the in-between
          feel) — char-by-char at 5× playback would be unreadable */
+      x.font = m.mono ? FONT_CODE : FONT_BODY;
       text = now >= m.t ? m.text : '';
-      pop = clamp((now - m.t) / 0.5, 0, 1);
+      pop = clamp((now - m.t) / 0.85, 0, 1);
       by = y + (1 - pop) * 7;
       tw = x.measureText(text).width;
       x.save();
@@ -640,7 +922,7 @@
         x.fillStyle = 'rgba(255,183,223,0.85)';
         x.font = '700 9px Inter, system-ui, sans-serif';
         x.fillText('✓✓', 442 - bw + 12 + tw + 4, by + 16);
-        x.font = '600 13.5px Inter, system-ui, sans-serif';
+        x.font = m.mono ? FONT_CODE : FONT_BODY;
         drawYouAvatar(x, 462, by + 12, 8.5);
       } else {
         bw = tw + 26;
@@ -656,7 +938,7 @@
     if (lay.typing >= 0 && (!lay.card || lay.rows.length < 2)) {
       drawBotAvatar(x, 54, y + 12, 8.5);
       chatBubble(x, 72, y + 1, 52, 22, 'rgba(34,211,238,0.10)', 'rgba(56,189,248,0.04)', 'rgba(103,232,249,0.22)', 'rgba(34,211,238,0.10)');
-      var ti = Math.floor(now * 3) % 3;
+      var ti = Math.floor(now * 1.5) % 3;
       for (k = 0; k < 3; k++) {
         x.fillStyle = k === ti ? '#7deeff' : 'rgba(103,232,249,0.30)';
         x.beginPath(); x.arc(88 + k * 12, y + 12, 3.2, 0, 6.29); x.fill();
@@ -665,9 +947,9 @@
 
     /* ---- qrbot's pairing attachment: the QR lives in the conversation ---- */
     if (lay.card) {
-      var cp = clamp((now - T_QR_ON) / 0.5, 0, 1);
+      var cp = clamp((now - T_QR_ON) / 0.7, 0, 1);
       var cs = Math.max(0.001, easeOutBack(cp));
-      var cal = Math.min(1, ramp(now, T_QR_ON, T_QR_ON + 0.18)) * (1 - ramp(now, T_QR_END - 0.55, T_QR_END - 0.12));
+      var cal = Math.min(1, ramp(now, T_QR_ON, T_QR_ON + 0.18)) * (1 - ramp(now, T_QR_END - 0.7, T_QR_END - 0.1));
       var ok = now >= T_FLASH - 0.05;
       var qX = 210, qY = 82, qS = 92;
       x.save();
@@ -714,7 +996,7 @@
       x.stroke();
       /* scan sweep inside the QR */
       if (!ok) {
-        var swin = ramp(now, S3 + 6.5, S3 + 6.9) * (1 - ramp(now, S3 + 9.85, S3 + 10.15));
+        var swin = ramp(now, S3 + 5.0, S3 + 5.4) * (1 - ramp(now, S3 + 6.7, S3 + 6.95));
         if (swin > 0.01) {
           var sy = qY + sweepVal(now) * qS;
           x.save();
@@ -742,8 +1024,8 @@
       x.fillStyle = '#64789a';
       x.font = '500 9px "JetBrains Mono", monospace';
       x.textAlign = 'center';
-      x.fillText(!ok ? 'scan with qrfile on your phone —' : 'lane open — files now move', 256, 186);
-      x.fillText(!ok ? 'confirm the 4 digits to talk' : 'device to device over your LAN', 256, 197);
+      x.fillText(!ok ? 'scan it with qrfile on your phone' : 'paired — your inbox is live', 256, 186);
+      x.fillText(!ok ? 'then type the 4 digits in the chat' : 'device to device over your LAN', 256, 197);
       x.textAlign = 'left';
       x.restore();
     }
@@ -759,16 +1041,30 @@
     rr(x, 16, H - 21, 392, 16, 8); x.stroke();
     x.fillStyle = '#41527a'; x.font = '700 10px Inter, system-ui, sans-serif';
     x.fillText('＋', 24, H - 9);
-    x.fillStyle = '#3a4760';
-    x.font = '600 10.5px Inter, system-ui, sans-serif';
-    x.fillText('say it in plain words — qrbot does the rest', 40, H - 9);
-    if (blink && lay.rows.length < CHAT.length) {
-      x.fillStyle = '#22d3ee';
-      x.fillRect(398, H - 19, 3.5, 12);
-    } else {
-      x.fillStyle = 'rgba(148,178,255,0.40)';
+    /* the composer: the user's own words appear here, char by char, then send */
+    var typed = inputTyping(now);
+    if (typed) {
+      x.fillStyle = '#dbe6ff';
+      x.font = '600 10.5px Inter, system-ui, sans-serif';
+      var typedTxt = typed.text.slice(0, typed.shown);
+      x.fillText(typedTxt, 40, H - 9);
+      x.fillStyle = blink ? '#67e8f9' : 'rgba(103,232,249,0.35)';
+      x.fillRect(41 + x.measureText(typedTxt).width, H - 18, 1.6, 11);
+      x.fillStyle = 'rgba(103,232,249,0.9)';
       x.font = '700 10px "JetBrains Mono", monospace';
       x.fillText('⏎', 398, H - 9.5);
+    } else {
+      x.fillStyle = '#3a4760';
+      x.font = '600 10.5px Inter, system-ui, sans-serif';
+      x.fillText('say it in plain words — qrbot does the rest', 40, H - 9);
+      if (blink && lay.rows.length < CHAT.length) {
+        x.fillStyle = '#22d3ee';
+        x.fillRect(398, H - 19, 3.5, 12);
+      } else {
+        x.fillStyle = 'rgba(148,178,255,0.40)';
+        x.font = '700 10px "JetBrains Mono", monospace';
+        x.fillText('⏎', 398, H - 9.5);
+      }
     }
     chatScr.texture.needsUpdate = true;
   }
@@ -780,19 +1076,21 @@
     drawIfChanged: function (time) {
       var now = state.t;
       var lay = chatLayout(now);
-      /* newest row pops over ~0.5 film-s: quantize its entry for redraws */
+      /* newest row pops over ~0.85 film-s: quantize its entry for redraws */
       var lastT = lay.rows.length ? CHAT[lay.rows[lay.rows.length - 1]].t : 0;
-      var pop = lay.rows.length && now < lastT + 0.5 ? Math.floor(Math.min(8, (now - lastT) * 16)) : 9;
+      var pop = lay.rows.length && now < lastT + 0.85 ? Math.floor(Math.min(8, (now - lastT) * 9.5)) : 9;
       var cardK = '_';
       if (lay.card) {
         if (now >= T_FLASH - 0.05) cardK = 'ok';
         else {
-          var pk = clamp((now - T_QR_ON) / 0.5, 0, 1);
+          var pk = clamp((now - T_QR_ON) / 0.7, 0, 1);
           cardK = pk < 1 ? 'p' + Math.round(pk * 12) : 's' + Math.floor(sweepVal(now) * 22);
         }
       }
       var bl = Math.floor(time * 2.6) % 2;
-      var k = lay.rows.length + '|' + lay.typing + '|' + cardK + '|' + pop + '|' + bl + '|' + Math.floor(now * 3) % 3;
+      var typedNow = inputTyping(now);
+      var typedK = typedNow ? typedNow.shown : -1;
+      var k = lay.rows.length + '|' + lay.typing + '|' + cardK + '|' + pop + '|' + bl + '|' + Math.floor(now * 1.5) % 3 + '|' + typedK;
       if (k !== this.lastKey) { this.lastKey = k; drawChat(now, lay, bl === 1); }
     }
   };
@@ -1223,46 +1521,6 @@
     scene.add(qrGroup);
     var QR_ANCHOR = V3(-2.2, 1.842, 0.16);
 
-    /* --- qrbot: the assistant's little avatar, standing on the desk
-       beside the monitor. appears when the MCP attaches (ch3 on). --- */
-    var bot = new THREE.Group();
-    var botShell = mat(0x16202f, { roughness: 0.35, metalness: 0.45 });
-    var botDark = mat(0x0a101d, { roughness: 0.3, metalness: 0.35 });
-    var botAccent = new THREE.MeshStandardMaterial({ color: 0x22d3ee, roughness: 0.25, metalness: 0.1, emissive: 0x16808f, emissiveIntensity: 0.7 });
-    var botEyeMat = new THREE.MeshBasicMaterial({ color: 0x9ff5ff });
-    var botViolet = new THREE.MeshBasicMaterial({ color: 0xa78bfa });
-    var botHead = new THREE.Group();
-    var botBody = put(botHead, new THREE.SphereGeometry(0.155, 20, 16), botShell, 0, 0.2, 0);
-    botBody.scale.set(0.92, 1.02, 0.82);
-    var botFace = put(botHead, new THREE.SphereGeometry(0.126, 20, 14), botDark, 0, 0.225, 0.03);
-    botFace.scale.set(0.9, 0.94, 0.76);
-    put(botHead, new THREE.SphereGeometry(0.02, 12, 10), botEyeMat, -0.048, 0.24, 0.148);
-    put(botHead, new THREE.SphereGeometry(0.02, 12, 10), botEyeMat, 0.048, 0.24, 0.148);
-    put(botHead, new THREE.SphereGeometry(0.011, 8, 6), botAccent, 0, 0.175, 0.152);  /* little chin light */
-    put(botHead, new THREE.CylinderGeometry(0.005, 0.005, 0.085, 6), botAccent, 0, 0.375, -0.01);
-    put(botHead, new THREE.SphereGeometry(0.017, 10, 8), botViolet, 0, 0.425, -0.01);
-    bot.add(botHead);
-    /* torso ring, arms, feet */
-    put(bot, new THREE.CylinderGeometry(0.062, 0.075, 0.05, 18), botDark, 0, 0.065, 0);
-    var botArmL = put(bot, new THREE.CylinderGeometry(0.013, 0.01, 0.12, 8), botShell, -0.16, 0.14, 0.02);
-    botArmL.rotation.z = 0.5;
-    var botArmR = put(bot, new THREE.CylinderGeometry(0.013, 0.01, 0.12, 8), botShell, 0.16, 0.14, 0.02);
-    botArmR.rotation.z = -0.5;
-    put(bot, new THREE.SphereGeometry(0.022, 10, 8), botAccent, -0.2, 0.085, 0.02);
-    put(bot, new THREE.SphereGeometry(0.022, 10, 8), botAccent, 0.2, 0.085, 0.02);
-    put(bot, new THREE.SphereGeometry(0.042, 12, 10), botDark, -0.062, 0.03, 0);
-    put(bot, new THREE.SphereGeometry(0.042, 12, 10), botDark, 0.062, 0.03, 0);
-    var botHalo = makeHalo('rgba(34,211,238,0.3)', 0.62);
-    botHalo.material.opacity = 0;
-    botHalo.position.set(0, 0.22, 0);
-    bot.add(botHalo);
-    bot.position.set(-1.42, 0.838, 0.16);
-    bot.rotation.y = -0.35;
-    bot.visible = false;
-    bot.scale.setScalar(0.001);
-    scene.add(bot);
-    var BOT_BASE_Y = 0.838, BOT_BASE_RY = -0.35;
-
     /* --- your phone (you are the one holding it — it rises into view) --- */
     var phone = new THREE.Group();
     var pbody = mat(0x0e1420, { roughness: 0.35, metalness: 0.5 });
@@ -1277,7 +1535,7 @@
     /* ============================================================
        old-way props (chapter 1)
        ============================================================ */
-    var oldway = { group: new THREE.Group(), mats: [], labels: [] };
+    var oldway = { group: new THREE.Group(), mats: [] };
     var oG = oldway.group;
     var oM = function (m) { m.transparent = true; oldway.mats.push(m); return m; };
 
@@ -1320,6 +1578,9 @@
     var shellMat = oM(new THREE.MeshStandardMaterial({ color: 0xcdd5df, roughness: 0.28, metalness: 0.85 }));
     var contactMat = oM(new THREE.MeshStandardMaterial({ color: 0xd8b24a, roughness: 0.35, metalness: 0.9 }));
     var cable = put(oG, new THREE.TubeGeometry(cableCurve, 150, 0.013, 10, false), cableMat, 0, 0, 0);
+    /* the tangle is animated — keep the rest pose to writhe around */
+    oldway.cableGeo = cable.geometry;
+    oldway.cableBase = cable.geometry.attributes.position.array.slice(0);
 
     /* USB-A plug: shell inserted into the tower's front port + tapered strain boot */
     var usbA = new THREE.Group();
@@ -1350,20 +1611,6 @@
     phoneFlat.add(usbC);
     oG.add(phoneFlat);
 
-    /* labels — each sticky note only shows while it tells its part of the story */
-    var oldLabels = [
-      { t: 'one drawer. forty cables…', p: V3(-1.62, 1.85, 0.42), c: '#c7d3ea', on: [S1 + 0.4, S1 + 4.6], size: 18 },
-      { t: 'the knot. every time.', p: V3(-1.55, 1.42, 0.5), c: '#fbd38d', on: [S1 + 3.6, S1 + 6.6], size: 18 },
-      { t: 'plugged in — at last', p: V3(-0.97, 1.22, 0.35), c: '#8ea3c5', on: [S1 + 5.7, S1 + 9.0], size: 16 }
-    ];
-    for (var li = 0; li < oldLabels.length; li++) {
-      var sp = makeTextSprite(oldLabels[li].t, oldLabels[li].c, oldLabels[li].size || 40);
-      sp.position.copy(oldLabels[li].p);
-      if (oldLabels[li].sc) sp.scale.multiplyScalar(oldLabels[li].sc);
-      oG.add(sp);
-      oldway.mats.push(sp.material);
-      oldway.labels.push({ mat: sp.material, t0: oldLabels[li].on[0], t1: oldLabels[li].on[1] });
-    }
     /* make every material in the old-way set fade together (cable, plugs, tower) */
     oG.traverse(function (o) {
       var m = o.material;
@@ -1373,7 +1620,7 @@
     scene.add(oG);
 
     /* ============================================================
-       LAN beam + packets (built when pair happens)
+       LAN beam + packets (curve builds when the first file ships)
        ============================================================ */
     /* file curve: a document travels from the monitor (computer) to the phone.
        no beam, no text — just the paper moving through the air. */
@@ -1436,16 +1683,12 @@
     }
 
     /* anchors for chat bubbles:
-       `you`  — an invisible spot where your half of the chat starts,
-                swapped for the raised phone once you hold it up
-       `bot`  — rides on the robot's antler, moves when it hops */
+       `you` — an invisible spot where your half of the chat starts,
+               swapped for the raised phone once you hold it up */
     var anchors = {
-      you: new THREE.Object3D(),
-      bot: new THREE.Object3D()
+      you: new THREE.Object3D()
     };
     anchors.you.position.set(-1.55, 1.15, 1.55);
-    anchors.bot.position.set(0.02, 0.34, 0.04);
-    bot.add(anchors.bot);
     scene.add(anchors.you);
 
     world = {
@@ -1454,13 +1697,12 @@
       dustGeo: dustGeo, dustPts: dustPts, DUST: DUST, dustRnd: rndD,
       desk: desk, mon: mon, screenMesh: screenMesh, chatMesh: chatMesh, siteMesh: siteMesh, mug: mug,
       qrGroup: qrGroup, confirmRing: confirmRing,
-      bot: bot, BOT_BASE_Y: BOT_BASE_Y, BOT_BASE_RY: BOT_BASE_RY, botHead: botHead, botHalo: botHalo,
+      anchors: anchors, QR_ANCHOR: QR_ANCHOR,
       phone: phone, phoneAnchor: phoneAnchor,
       oldway: oldway, cable: cable,
       fileCurve: fileCurve, buildFileCurve: buildFileCurve, packets: [], toasts: [],
-      scanCone: null, coneBuilt: false,
+      scanCone: null, scanGlow: null, coneBuilt: false,
       spawnPacket: spawnPacket, spawnToast: spawnToast,
-      anchors: anchors, QR_ANCHOR: QR_ANCHOR,
       pcGlow: pcGlow, phGlow: phGlow
     };
     return world;
@@ -1481,29 +1723,27 @@
     [[-0.55, 1.56, 4.35], [-1.15, 1.52, 3.35], [-1.55, 1.5, 0.1], [-1.95, 1.7, 0.1]],
     /* old way — settle, then let the eyes drop onto the cable tangle */
     [[-1.15, 1.52, 3.35], [-1.95, 1.5, 2.6], [-1.95, 1.7, 0.1], [-1.6, 0.95, 0.5]],
-    /* power up — rise from the tangle to the terminal */
-    [[-1.95, 1.5, 2.6], [-2.28, 1.56, 2.05], [-1.6, 0.95, 0.5], [-2.36, 1.68, 0.1]],
-    /* just ask — hold on the screen while the QR pops */
-    [[-2.28, 1.56, 2.05], [-2.3, 1.55, 2.3], [-2.36, 1.68, 0.1], [-2.34, 1.7, 0.1]],
-    /* scan & pair — glance down at the raised phone */
-    [[-2.3, 1.55, 2.3], [-2.18, 1.5, 2.15], [-2.34, 1.7, 0.1], [-1.98, 1.6, 0.45]],
-    /* over the lan — pull back so the beam arc reads cleanly from monitor to phone */
-    [[-2.18, 1.5, 2.15], [-2.32, 1.55, 2.4], [-1.98, 1.6, 0.45], [-2.05, 1.58, 0.4]],
+    /* power up — rise from the tangle to the terminal, then hold on the install bar */
+    [[-1.95, 1.5, 2.6], [-2.22, 1.54, 2.45], [-1.6, 0.95, 0.5], [-2.3, 1.62, 0.1]],
+    /* pair — hold on the screen while the QR card runs, then drop to the phone */
+    [[-2.22, 1.54, 2.45], [-2.3, 1.55, 2.3], [-2.3, 1.62, 0.1], [-2.34, 1.7, 0.1]],
+    /* just ask — the ask on the screen, then the eyes follow the flights over
+       to the phone while the lane keeps delivering */
+    [[-2.3, 1.55, 2.3], [-2.32, 1.55, 2.4], [-2.34, 1.7, 0.1], [-2.05, 1.58, 0.4]],
     /* why it feels good — sit back, whole working set in frame */
     [[-2.32, 1.55, 2.4], [-2.02, 1.44, 3.5], [-2.05, 1.58, 0.4], [-2.25, 1.32, 0.2]],
-    /* four steps — lean over the keyboard checklist */
-    [[-2.02, 1.44, 3.5], [-2.2, 1.47, 2.6], [-2.25, 1.32, 0.2], [-2.32, 1.38, 0.35]],
-    /* in your pocket — dolly straight into the site on the monitor */
-    [[-2.2, 1.47, 2.6], [-2.35, 1.72, 1.42], [-2.32, 1.38, 0.35], [-2.36, 1.735, 0.08]]
+    /* get started — sit back to the desk, then dolly straight into the site
+       on the monitor (the download cards live there) */
+    [[-2.02, 1.44, 3.5], [-2.35, 1.72, 1.42], [-2.25, 1.32, 0.2], [-2.36, 1.735, 0.08]]
   ];
-  var HANDY = [0.35, 0.7, 0.55, 0.45, 0.35, 0.5, 0.4, 0.4, 0.3];
+  var HANDY = [0.35, 0.7, 0.55, 0.45, 0.4, 0.4, 0.3];
   /* world units of the set that should stay inside the frame on a portrait
      screen (the 16:9 shot cropped to a phone loses most of the room) */
   var FRAME_W = 2.5;
   var FRAME_MAX_PULL = 3.4;
 
-  var DURS = [4.5, 8.5, 7, 10, 8, 10, 8, 7, 9];
-  var TITLES = ['intro', 'the problem', 'install', 'pair', 'just ask', 'transfer', 'why qrfile', 'get started', 'download'];
+  var DURS = [4.5, 8.5, 7, 10, 18, 8, 14];
+  var TITLES = ['intro', 'the problem', 'install', 'pair', 'just ask', 'why qrfile', 'get started'];
   var TOTAL = 0;
   var SCENE_STARTS = DURS.map(function (d) { var s = TOTAL; TOTAL += d; return s; });
 
@@ -1516,9 +1756,15 @@
     [10.5, 12.9, 'qrfile removes all of that.'],
     [13.5, 16.2, 'two installs: the APK on your phone, pip install qrfile-mcp on your computer — then add it to your agent’s MCP config.'],
     [16.4, 19.7, 'Your AI assistant gains hands — and your Wi-Fi becomes the courier.'],
-    [20.1, 23.0, 'No commands. No console. You just say it:'],
-    [36.6, 38.0, 'Paired. Five minutes of trust, hands-free.'],
+    [20.1, 23.0, 'One-time pairing — qrbot drops a QR in the chat.'],
+    [23.6, 25.8, 'On your phone: open QRFile, receiving on, scan it.'],
+    [26.5, 28.0, 'Your phone shows four digits — generated on the spot.'],
+    [28.3, 29.45, 'Type them back in the chat — only that saves the pairing.'],
+    [30.5, 32.3, 'Paired. Five minutes of trust, hands-free.'],
+    [32.6, 34.9, 'Now just ask — no commands, no screens of settings.'],
+    [35.2, 37.7, 'It streams over your Wi-Fi and lands in your inbox.'],
     [38.3, 40.0, 'Already paired — files now move freely, device-to-device over your Wi-Fi.'],
+    [42.8, 45.4, 'More files? Just name them — the lane stays open.'],
     [46.0, 47.6, 'No re-pairing. No cloud copy. Just ask and it arrives.'],
     [48.4, 50.9, 'Why it feels good: no cable, no cloud copy, no login screens.'],
     [51.2, 53.4, 'A private inbox. A four-digit handshake. Nothing to manage.'],
@@ -1527,31 +1773,42 @@
     [59.1, 61.2, 'Install the app · pip install the MCP.'],
     [61.4, 62.9, 'Scan once. Then just ask, forever.'],
     [63.4, 66.1, 'The page on that screen is real — this is the install.'],
-    [66.4, 69.6, 'One card for the phone, one for the MCP server.'],
-    [69.9, 71.9, 'Step in, tap, done.']
+    [66.4, 69.7, 'One card for your phone, one for the MCP server — tap it, done.']
   ];
 
   var S1 = SCENE_STARTS[1], S2 = SCENE_STARTS[2], S3 = SCENE_STARTS[3];
   var S4 = SCENE_STARTS[4], S5 = SCENE_STARTS[5], S6 = SCENE_STARTS[6];
-  var S7 = SCENE_STARTS[7], S8 = SCENE_STARTS[8];
-  var T_BEAM_ON = S3 + 13.5;
-  var T_BEAM_OFF = S7 + 1.5;   /* the beam keeps flying through the benefits, out by "four steps" */
-  var T_FLASH = S3 + 13.15;
-  var T_QR_ON = S3 + 5.0;
-  var T_QR_HOLD = S5;
-  var T_QR_END = S5 + 0.7;
+  var S7 = SCENE_STARTS[TITLES.length - 1];  /* the closer (get started) */
+  var S8 = S7 + 7;  /* the site/download phase begins 7s into the closer */
+  var T_BEAM_ON = S4 + 2.6;    /* the lane opens as the first ask is answered */
+  var T_BEAM_OFF = S7 + 1.5;   /* packets keep flying through the benefits, out by "four steps" */
+  var T_FLASH = S3 + 9.3;      /* verified the instant the typed code sends — everything decays before the pair chapter holds */
+  var T_QR_ON = S3 + 3.2;      /* qrbot drops the pairing card into the chat */
+  var T_QR_END = S3 + 9.9;     /* it pops out the moment the pairing is confirmed */
+
+  /* the scroll ride ends one second INTO the closer's travel — the closer's
+     act plays out from the parked position, so the finale IS the end of the
+     page: nothing lives after it, and extra scroll neither moves the viewport
+     nor drifts the film. the +1 fencepost margin keeps the closer solidly
+     selected at max scroll (a ride ending exactly on the chapter boundary can
+     sample 56−ε due to sub-pixel rounding and fall back into chapter 5).
+     every scroll axis below maps film time to RIDE_END, not TOTAL. */
+  var RIDE_END = SCENE_STARTS[TITLES.length - 1] + 1.0;
 
   var beamB = 0, coneO = 0;
   var tmpV = null;
   var SV_A = new THREE.Vector3(), SV_B = new THREE.Vector3();
   var nowTZ = 0;
 
-  /* packets: deterministic schedule, driven purely by film time */
+  /* packets: deterministic schedule, driven purely by film time. all four
+     flights live in the merged "just ask" chapter — the ask and the first
+     file land, then the lane keeps delivering. durations are slow enough to
+     follow at 5× playback. */
   var PACKETS = [
-    { name: 'report.pdf', rev: false, c: 0x67e8f9, t0: S5 + 0.5, dur: 2.0 },
-    { name: 'notes-dev.pdf', rev: false, c: 0x67e8f9, t0: S5 + 3.0, dur: 2.0 },
-    { name: 'mix-tracks.zip', rev: false, c: 0xf59e0b, t0: S5 + 5.5, dur: 2.0 },
-    { name: 'telemetry.json', rev: false, c: 0x34d399, t0: S5 + 8.0, dur: 2.0 }
+    { name: 'report.pdf', rev: false, c: 0x67e8f9, t0: S4 + 3.4, dur: 3.4 },
+    { name: 'notes-dev.pdf', rev: false, c: 0x67e8f9, t0: S4 + 8.9, dur: 3.0 },
+    { name: 'mix-tracks.zip', rev: false, c: 0xf59e0b, t0: S4 + 13.6, dur: 2.9 },
+    { name: 'telemetry.json', rev: false, c: 0x34d399, t0: S4 + 14.9, dur: 2.4 }
   ];
   var ORDERED = PACKETS.slice().sort(function (a, b) { return (a.t0 + a.dur) - (b.t0 + b.dur); });
   var ARRIVALS = PACKETS.map(function (p) { return p.t0 + p.dur; });
@@ -1569,39 +1826,48 @@
   var PH_FROM = { x: -1.45, y: 0.5, z: 0.95, ry: 0.4, rx: -0.65, rz: 0.2 };
   /* aiming pose while scanning the QR (tilted up toward the display) */
   var PH_SCAN = { x: -2.02, y: 1.5, z: 0.98, ry: -0.14, rx: -0.38, rz: 0.08 };
-  function phoneLift(now) { return ease3(ramp(now, S3 + 5.1, S3 + 6.45)); }
+  function phoneLift(now) { return ease3(ramp(now, S3 + 4.1, S3 + 5.45)); }
   /* how "aimed at the screen" the phone is: ramps in as scanning starts,
      holds, then relaxes to the reading pose right after the pairing flash */
   function phoneAim(now) {
-    if (now < S3 + 6.0) return 0;
-    if (now < T_FLASH) return ease3(ramp(now, S3 + 6.0, S3 + 7.3));
-    return 1 - ease3(ramp(now, T_FLASH, T_FLASH + 1.1));
+    if (now < S3 + 5.0) return 0;
+    if (now < T_FLASH) return ease3(ramp(now, S3 + 5.0, S3 + 6.3));
+    return 1 - ease3(ramp(now, T_FLASH, T_FLASH + 0.7));
   }
   function sweepVal(now) {
-    if (now < S3 + 5.4) return 0;
-    if (now < S3 + 8.2) return Math.abs(Math.sin((now - S3 - 5.4) * 3.1));
+    if (now < S3 + 4.4) return 0;
+    if (now < S3 + 6.8) return Math.abs(Math.sin((now - S3 - 4.4) * 1.85));
     return 0.06;
   }
-  function digitsVal(now) { return clamp(Math.floor((now - (S3 + 8.2)) / 0.35), 0, 4); }
+  function digitsVal(now) { return now >= S3 + 6.9 ? 4 : 0; }  /* the code displays all at once, the moment the scan joins */
 
+  /* the scan reads as light, not as a cone through the air: the phone's torch
+     spills onto the monitor around the QR, and the phone's back glows. a beam
+     drawn between lens and screen was invisible anyway (the phone's back faces
+     the screen) and read as a floating cone. */
   function buildScanCone() {
     if (world.scanCone) { world.scene.remove(world.scanCone); world.scanCone = null; }
-    var end = new THREE.Vector3();
-    world.phoneAnchor.getWorldPosition(end);
-    var start = world.QR_ANCHOR.clone();
-    var dist = end.distanceTo(start) + 0.25;
-    var geo = new THREE.ConeGeometry(0.09, dist, 14, 1, true);
-    var m = new THREE.MeshBasicMaterial({
-      color: 0x67e8f9, transparent: true, opacity: 0,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
-    });
-    var cone = new THREE.Mesh(geo, m);
-    var dirA = end.clone().sub(start).normalize();
-    cone.quaternion.setFromUnitVectors(V3(0, 1, 0), dirA);
-    cone.position.copy(start).lerp(end, 0.5);
-    cone.userData.end = end;
-    world.scene.add(cone);
-    world.scanCone = cone;
+    if (world.scanGlow) { world.scene.remove(world.scanGlow); world.scanGlow = null; }
+
+    /* the pool of light on the monitor, centred on the QR */
+    var spill = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: makeSoftTex('rgba(150,240,255,0.55)', 'rgba(34,211,238,0.10)'),
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0
+    }));
+    spill.scale.set(0.62, 0.46, 1);
+    spill.position.copy(world.QR_ANCHOR);
+    spill.position.z += 0.008;
+    world.scene.add(spill);
+    world.scanCone = spill;
+
+    /* the phone's back glowing as it lights the code */
+    var lens = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: makeSoftTex('rgba(190,250,255,0.75)', 'rgba(34,211,238,0.18)'),
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0
+    }));
+    lens.scale.set(0.2, 0.2, 1);
+    world.scene.add(lens);
+    world.scanGlow = lens;
   }
 
   /* one-time pools: packets + toasts (hidden; driven per frame by film time) */
@@ -1673,8 +1939,8 @@
   function syncPhone(now) {
     var st, rows = [], i, p;
     if (now < S2) st = 'off';
-    else if (now < S4) st = 'app';
-    else if (now < T_FLASH + 0.45) st = 'scan';
+    else if (now < S3 + 4.8) st = 'app';
+    else if (now < S4 + 1.0) st = 'scan';
     else if (now < S8 + 0.95) {
       st = 'inbox';
       for (i = 0; i < ORDERED.length; i++) {
@@ -1684,7 +1950,7 @@
     }
     else st = 'sync';
     if (st !== phoneState.st) { phoneScr.set(st); phoneState.st = st; }
-    phoneScr.setUi({ digits: digitsVal(now), sweep: sweepVal(now), rows: rows });
+    phoneScr.setUi({ digits: digitsVal(now), sweep: sweepVal(now), rows: rows, confirmed: now >= T_FLASH });
   }
 
   /* ============================================================
@@ -1700,17 +1966,13 @@
     { k: 'install', h: 'give your AI <b>hands</b>',
       p: 'Two installs: the APK on your phone, and <code>pip install qrfile-mcp</code> on your computer. Then wire qrfile-mcp into your AI agent’s MCP config — and pair once. qrbot handles the rest.' },
     { k: 'pair', h: 'scan. <b>four digits.</b> paired.',
-      p: 'Lift your phone, scan the QR, confirm the 4-digit code. That’s the entire security ceremony.' },
-    { k: 'just ask', h: '“send it to <b>my phone</b>”',
-      p: 'No commands, no console. Say it like you’d say it to a person — <code>qrbot</code> answers, opens a private lane, and a QR appears.' },
-    { k: 'transfer', h: 'files fly <b>to your phone</b>',
-      p: 'Once paired, files transfer freely — qrbot streams them straight to your phone over your Wi-Fi. No re-pairing, no internet round-trip, no cloud copy.' },
+      p: 'Lift your phone, scan the QR in the chat, then type back the four digits your phone shows. Only that saves the pairing — that’s the entire ceremony.' },
+    { k: 'just ask', h: '“move report.pdf <b>to my phone</b>”',
+      p: 'No commands, no console. Say it like you’d say it to a person — and qrbot streams file after file straight to your phone over your Wi-Fi. No re-pairing, no internet round-trip, no cloud copy.' },
     { k: 'why qrfile', h: 'everything <b>stays local</b>',
       p: 'Plain-chat transfers over your own Wi-Fi. A QR + 4-digit pair that expires on its own. A private inbox, not a Downloads dump. Share mode for anything nearby. Any assistant that speaks MCP.' },
     { k: 'get started', h: 'install. pair. <b>ask.</b>',
-      p: 'Grab the APK for your phone. <code>pip install qrfile-mcp</code> for the computer. Scan once — qrbot takes it from there.' },
-    { k: 'download', h: 'the download lives <b>on that screen</b>',
-      p: 'Everything above is the product. The page inside the film is the real install — the two cards on the screen are live. Pick one.' }
+      p: 'Grab the APK for your phone, and <code>pip install qrfile-mcp</code> — then scan once. The two cards on that screen are the live install. Pick one.' }
   ];
 
   var CH = { copies: [], ops: [] };
@@ -1779,7 +2041,19 @@
     var vh = stageH();
     var span = Math.max(1, r.height - vh);
     var top = r.top + (window.pageYOffset || 0);
-    return top + (clamp(t, 0, TOTAL) / TOTAL) * span;
+    return top + (clamp(t, 0, RIDE_END) / RIDE_END) * span;
+  }
+  /* the stylesheet sizes the ride for the whole film (900vh / 700vh); the page
+     only needs to scroll to the closer's START (its final act plays from the
+     parked position), so the track is trimmed by the closer's share of travel.
+     the stylesheet height is captured once, before the first trim, so the
+     responsive breakpoints keep their intended proportions on every resize. */
+  var rideH0 = -1;
+  function applyRide() {
+    if (!el.track) return;
+    var vh = stageH();
+    if (rideH0 < 0) rideH0 = el.track.getBoundingClientRect().height;
+    el.track.style.height = (vh + (rideH0 - vh) * (RIDE_END / TOTAL)) + 'px';
   }
   /* every chapter change glides at the same speed and lands exactly on a
      chapter start, so a swipe feels identical each time (native smooth scroll
@@ -1843,7 +2117,7 @@
   function filmPos() {
     var r = el.track.getBoundingClientRect();
     var vh = stageH();
-    return clamp(-r.top / Math.max(1, r.height - vh), 0, 1) * TOTAL;
+    return clamp(-r.top / Math.max(1, r.height - vh), 0, 1) * RIDE_END;
   }
   /* true while the film is covering the middle of the viewport */
   function filmCovers() {
@@ -1929,45 +2203,24 @@
       if (prevNow < ARRIVALS[i] && now >= ARRIVALS[i]) FX.gridPulse = 1;
     }
 
-    /* ---- ch2 · the old way (props fade in, sticky labels beat along) ---- */
+    /* ---- ch2 · the old way (props fade in and the tangle fights the whole time) ---- */
     var oldOp = ramp(now, S1 - 0.35, S1 + 1.5) * (1 - ramp(now, S2 + 0.35, S2 + 2.0));
     world.oldway.group.visible = oldOp > 0.02;
-    if (world.oldway.group.visible) setGroupOpacity(world.oldway.mats, oldOp * 0.96);
-    /* sticky notes follow the caption beats, on top of the chapter fade */
-    for (i = 0; i < world.oldway.labels.length; i++) {
-      var lb = world.oldway.labels[i];
-      lb.mat.opacity = oldOp * 0.96 * ramp(now, lb.t0, lb.t0 + 0.6) * (1 - ramp(now, lb.t1 - 0.5, lb.t1));
-    }
-
-    /* ---- ch3 on · the qrbot avatar stands up next to the monitor ---- */
-    var botScale = easeOutBack(ramp(now, S2 + 0.1, S2 + 1.05));
-    world.bot.visible = botScale > 0.001;
-    if (world.bot.visible) {
-      /* is a document currently in flight? */
-      var sending = false;
-      for (var _pi = 0; _pi < PACKETS.length; _pi++) {
-        var _u = (now - PACKETS[_pi].t0) / PACKETS[_pi].dur;
-        if (_u > 0.05 && _u < 0.95) { sending = true; break; }
+    if (world.oldway.group.visible) {
+      setGroupOpacity(world.oldway.mats, oldOp * 0.96);
+      /* the cable writhes and snags — the mess itself is the point of the scene.
+         pinned at both plugs, liveliest through the knot in the middle */
+      var cPos = world.oldway.cableGeo.attributes.position.array;
+      var cBase = world.oldway.cableBase;
+      var wob = 0.014 * oldOp;
+      for (var ci = 0; ci < cPos.length; ci += 3) {
+        var bX = cBase[ci], bY = cBase[ci + 1], bZ = cBase[ci + 2];
+        var grip = Math.sin(Math.PI * clamp((-bX - 0.92) / 0.38, 0, 1));
+        cPos[ci] = bX + Math.sin(now * 2.4 + bZ * 30 + bY * 16) * wob * 0.6 * grip;
+        cPos[ci + 1] = bY + Math.sin(now * 3.3 + bX * 24 + bZ * 12) * wob * grip;
+        cPos[ci + 2] = bZ + Math.cos(now * 2.0 + bX * 18) * wob * 0.75 * grip;
       }
-      /* a friendly hop when pairing lands */
-      var hopT = (now - T_FLASH) / 1.25;
-      var hop = hopT > 0 && hopT < 3 ? Math.abs(Math.sin(hopT * Math.PI * 2.2)) * Math.exp(-hopT * 2.1) * 0.14 : 0;
-      world.bot.scale.setScalar(Math.max(0.001, botScale));
-      world.bot.position.y = world.BOT_BASE_Y + hop + (sending ? 0.012 * Math.sin(now * 12) : 0.008 * Math.sin(now * 2.4 + 0.7));
-      world.botHalo.material.opacity = (sending ? 0.6 : 0.4) * botScale;
-      /* the little body turns toward your phone while you aim it at the QR */
-      var bAim = phoneAim(now);
-      var bRy = world.BOT_BASE_RY;
-      if (bAim > 0.001) {
-        world.phoneAnchor.getWorldPosition(SV_A);
-        bRy = world.BOT_BASE_RY + clamp(Math.atan2(SV_A.x - world.bot.position.x, SV_A.z - world.bot.position.z) - world.BOT_BASE_RY, -0.6, 0.6) * 0.85 * bAim;
-      }
-      world.bot.rotation.y = bRy;
-      world.botHead.rotation.x = (sending ? -0.12 : -0.04 * bAim);
-      /* deterministic blink */
-      var eyeOpen = (now * 0.187) % 1 < 0.035 ? 0.12 : 1;
-      world.botHead.children[2].scale.y = eyeOpen;
-      world.botHead.children[3].scale.y = eyeOpen;
+      world.oldway.cableGeo.attributes.position.needsUpdate = true;
     }
 
     /* ---- last chapter · the site fades in inside the monitor ---- */
@@ -1983,25 +2236,31 @@
     /* ---- pairing scan sweep + confirm ring now render inside the chat
        card (canvas); the 3D group only carries the ring below ---- */
 
-    /* ---- scan cone (built lazily from the raised-phone anchor) ---- */
-    var coneOn = now > S3 + 5.45 && now < S3 + 10.3;
+    /* ---- scan light (built lazily): a torch spill on the monitor plus the
+       phone's own back glow. no beam through the air. ---- */
+    var coneOn = now > S3 + 4.4 && now < S3 + 8.3;
     if (coneOn && !world.scanCone) buildScanCone();
     if (world.scanCone) {
-      var coneTarget = 0.3 * ramp(now, S3 + 6.7, S3 + 7.05) * (1 - ramp(now, S3 + 9.9, S3 + 10.12)) * (0.88 + 0.12 * Math.sin(now * 8.3));
-      coneO = lerp(coneO, coneTarget, Math.min(1, dt * 5));
+      var coneTarget = 0.85 * ramp(now, S3 + 5.0, S3 + 5.5) * (1 - ramp(now, S3 + 6.9, S3 + 8.2));
+      coneTarget *= 0.86 + 0.14 * Math.sin(now * 6.2);
+      coneO = lerp(coneO, coneTarget, Math.min(1, dt * 6));
       world.scanCone.material.opacity = coneO;
-      world.scanCone.visible = coneO > 0.02;
-      /* keep the beam glued to the phone as it aims at the QR */
-      world.phoneAnchor.getWorldPosition(SV_A);
-      SV_B.copy(SV_A).sub(world.QR_ANCHOR).normalize();
-      world.scanCone.quaternion.setFromUnitVectors(V3(0, 1, 0), SV_B);
-      world.scanCone.position.copy(world.QR_ANCHOR).lerp(SV_A, 0.5);
+      world.scanCone.visible = coneO > 0.015;
+      if (world.scanGlow) {
+        world.phoneAnchor.getWorldPosition(SV_A);
+        world.scanGlow.position.copy(SV_A);
+        world.scanGlow.material.opacity = coneO * 0.75;
+        world.scanGlow.visible = coneO > 0.015;
+        var gs = 0.16 + 0.02 * Math.sin(now * 6.4);
+        world.scanGlow.scale.set(gs, gs, 1);
+      }
     } else {
       coneO = 0;
     }
 
-    /* ---- pairing flash + expanding confirm ring ---- */
-    var f = now < T_FLASH ? 0 : Math.max(0, 1 - (now - T_FLASH) / 0.55);
+    /* ---- pairing flash + expanding confirm ring — a soft blink: rises
+       0.06, peaks at half opacity, fully gone before the chapter holds ---- */
+    var f = 0.5 * ramp(now, T_FLASH, T_FLASH + 0.06) * (1 - ramp(now, T_FLASH + 0.25, T_FLASH + 0.7));
     el.flash.style.opacity = f.toFixed(3);
     var rt = clamp((now - T_FLASH) / 0.62, 0, 1);
     if (rt > 0.001 && rt < 0.999) {
@@ -2077,17 +2336,24 @@
       s = SPOTS[i];
       if (!s.el) continue;
       if (compact) {
-        /* phones: the cards are docked by CSS above each other — the 3D screen
-           is far too small to aim at, and projecting would pin them to the edges */
-        s.el.style.left = '';
-        s.el.style.top = '';
-      } else if (op > 0.005 && tmpV) {
-        /* canvas-pixel card centre → plane-local → world → screen % */
-        tmpV.set((s.u - 0.5) * 1.86, (0.5 - s.v) * 1.02, 0.02);
-        world.siteMesh.localToWorld(tmpV);
-        tmpV.project(world.camera);
-        s.el.style.left = clamp((tmpV.x * 0.5 + 0.5) * 100, 6, 94).toFixed(2) + '%';
-        s.el.style.top = clamp((-tmpV.y * 0.5 + 0.5) * 100, 8, 92).toFixed(2) + '%';
+        /* phones: dock the cards above each other near the bottom — the 3D
+           screen is far too small to aim at. Position is set inline so a
+           stylesheet still cached by the browser can't strand them top-left. */
+        s.el.style.left = '50%';
+        s.el.style.top = 'auto';
+        s.el.style.bottom = 'calc(env(safe-area-inset-bottom, 0px) + ' + (i === 0 ? 136 : 66) + 'px)';
+        s.el.style.transform = 'translateX(-50%)';
+      } else {
+        s.el.style.bottom = '';
+        s.el.style.transform = '';
+        if (op > 0.005 && tmpV) {
+          /* canvas-pixel card centre → plane-local → world → screen % */
+          tmpV.set((s.u - 0.5) * 1.86, (0.5 - s.v) * 1.02, 0.02);
+          world.siteMesh.localToWorld(tmpV);
+          tmpV.project(world.camera);
+          s.el.style.left = clamp((tmpV.x * 0.5 + 0.5) * 100, 6, 94).toFixed(2) + '%';
+          s.el.style.top = clamp((-tmpV.y * 0.5 + 0.5) * 100, 8, 92).toFixed(2) + '%';
+        }
       }
       /* hide entirely once faded out so it can't block the view */
       s.el.style.display = op <= 0.005 ? 'none' : '';
@@ -2115,7 +2381,7 @@
     var vh = stageH();
     var span = Math.max(1, r.height - vh);
     var p = clamp(-r.top / span, 0, 1);
-    var targetChapter = sceneIndex(p * TOTAL);
+    var targetChapter = sceneIndex(p * RIDE_END);
     var chapterEntered = (playbackChapter === null || targetChapter !== playbackChapter);
     var replayAsked = (replayRequestSeq > lastReplaySeq);
     if (chapterEntered) {
@@ -2130,6 +2396,7 @@
     if (chapterEntered || replayAsked) playbackT = SCENE_STARTS[playbackChapter];
     var chapterEnd = (playbackChapter < DURS.length - 1) ? SCENE_STARTS[playbackChapter + 1] : TOTAL;
     playbackT = Math.min(chapterEnd, playbackT + dt * (REDUCED ? 3 : 5));
+    if (window.__QHOLD !== undefined) playbackT = Math.min(chapterEnd, window.__QHOLD);
     state.t = playbackT;
     state.mx += (state.tmx - state.mx) * Math.min(1, dt * 3);
     state.my += (state.tmy - state.my) * Math.min(1, dt * 3);
@@ -2151,15 +2418,24 @@
       /* hand-held micro-drift: slow bob + faster shake, stronger while aiming */
       var w1 = Math.sin(time * 2.1), w2 = Math.sin(time * 1.35 + 1.3), w3 = Math.sin(time * 0.8 + 2.4);
       var shake = 0.35 + 0.65 * aim;
+      var dX = shake * (0.012 * w1 + 0.007 * w3);
+      var dY = shake * (0.010 * w2 + 0.005 * w1);
+      var dZ = shake * 0.008 * w2;
+      var dRX = shake * 0.018 * w2;
+      var dRY = shake * 0.022 * w1;
+      var dRZ = shake * (0.016 * w3 + 0.010 * w1);
+      /* the camera feed reads this drift, so the view moves with the hand */
+      handDrift.x = dX; handDrift.y = dY; handDrift.z = dZ;
+      handDrift.rx = dRX; handDrift.ry = dRY; handDrift.rz = dRZ;
       world.phone.position.set(
-        lerp(PH_FROM.x, px, lift) + shake * (0.012 * w1 + 0.007 * w3),
-        lerp(PH_FROM.y, py, lift) + shake * (0.010 * w2 + 0.005 * w1) + 0.02 * Math.sin(now * 1.5),
-        lerp(PH_FROM.z, pz, lift) + shake * 0.008 * w2
+        lerp(PH_FROM.x, px, lift) + dX,
+        lerp(PH_FROM.y, py, lift) + dY + 0.02 * Math.sin(now * 1.5),
+        lerp(PH_FROM.z, pz, lift) + dZ
       );
       world.phone.rotation.set(
-        lerp(PH_FROM.rx, prx, lift) + shake * 0.018 * w2,
-        lerp(PH_FROM.ry, pry, lift) + shake * 0.022 * w1,
-        lerp(0.16, prz, lift) + shake * (0.016 * w3 + 0.010 * w1)
+        lerp(PH_FROM.rx, prx, lift) + dRX,
+        lerp(PH_FROM.ry, pry, lift) + dRY,
+        lerp(0.16, prz, lift) + dRZ
       );
       /* set the phone down as the film zooms into the install page */
       var parkDrop = ease3(ramp(now, S8 + 1.5, S8 + 2.7));
@@ -2246,30 +2522,46 @@
       }, 250);
     }, { passive: true });
     /* one wheel gesture = step one chapter forward/back while the film fills
-       the screen; momentum tails are swallowed, and at either end of the film
-       the wheel falls through to native scrolling so the page can move on */
-    var wheelLastAt = 0, wheelAccum = 0, gestureStepped = false, wheelLockUntil = 0;
+       the screen — no matter how long the gesture runs. a gesture ends only
+       after a real quiet gap (WHEEL_QUIET), so a trackpad flick's momentum
+       tail (which can pause for 200ms mid-stream and outlast the glide) can
+       never be mistaken for a second flick and step two parts. at the start
+       the wheel falls through to native scrolling; past the last chapter
+       there IS no further page — the wheel holds the frame on the finale. */
+    var WHEEL_QUIET = 280, wheelLastAt = 0, wheelAccum = 0, gestureStepped = false, wheelLockUntil = 0;
     window.addEventListener('wheel', function (e) {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (!filmCovers()) return;
       var t = performance.now();
+      /* every event beats the gesture's heartbeat — INCLUDING events the
+         momentum hold swallows. the old ordering measured quiet from the last
+         handled event, so the first event after the hold always read as a
+         520ms+ gap and re-armed mid-flick: one flick, two chapters. */
+      var rearm = (t - wheelLastAt) > WHEEL_QUIET;
+      wheelLastAt = t;
       if (t < wheelLockUntil) { e.preventDefault(); return; }  /* rest of this gesture's momentum */
       var unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? window.innerHeight || 550 : 1;
       var dy = e.deltaY * unit, dx = e.deltaX * unit;
       if (!dx && !dy) return;
       if (Math.abs(dx) > Math.abs(dy) + 1) return;  /* horizontal pan */
-      if (t - wheelLastAt > 160) { wheelAccum = 0; gestureStepped = false; }
-      wheelLastAt = t;
+      /* the whole run of events before a true quiet gap is ONE gesture */
+      if (rearm) { wheelAccum = 0; gestureStepped = false; }
       if (gestureStepped) { e.preventDefault(); return; }
       wheelAccum += dy;
       if (Math.abs(wheelAccum) < 50) { e.preventDefault(); return; }
       var dir = wheelAccum > 0 ? 1 : -1;
       if (stepChapter(dir)) {
         gestureStepped = true;
-        wheelLockUntil = t + 350;
+        /* swallow past the glide too: momentum keeps arriving while the page
+           is still settling onto the chapter start */
+        wheelLockUntil = t + GLIDE_MS;
+        e.preventDefault();
+      } else if (dir > 0) {
+        /* the story ends here — the finale is the end of the page, so a
+           downward scroll holds the frame still instead of sliding past it */
+        gestureStepped = true;
         e.preventDefault();
       }
-      /* else: at an end of the story — let native scrolling move the page */
     }, { passive: false });
     /* one swipe = one chapter: the film owns vertical drags while it fills the
        screen, so a flick can never skip a chapter or freeze mid-transition —
@@ -2328,6 +2620,7 @@
   }
 
   function resize() {
+    applyRide();
     if (!world) return;
     var w = el.player.clientWidth || window.innerWidth || 16;
     var h = el.player.clientHeight || window.innerHeight || 9;
@@ -2369,7 +2662,7 @@
     var r = el.track.getBoundingClientRect();
     var vh = stageH();
     var startP = clamp(-r.top / Math.max(1, r.height - vh), 0, 1);
-    playbackChapter = sceneIndex(startP * TOTAL);
+    playbackChapter = sceneIndex(startP * RIDE_END);
     playbackT = SCENE_STARTS[playbackChapter];
     state.t = playbackT;
     prevNow = state.t;
